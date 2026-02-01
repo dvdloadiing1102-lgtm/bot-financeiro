@@ -14,8 +14,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet
 
 # --- CONFIGURAÇÃO ---
-# O Token será pego automaticamente do Koyeb
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# SEU TOKEN ESTÁ AQUI DIRETO (Para garantir que funciona):
+TELEGRAM_TOKEN = "8314300130:AAGBQJ_7peneVciiSHJxf1E5f-CZbVc7XsU"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -77,7 +77,7 @@ class FinanceBot:
         elements = []
         styles = getSampleStyleSheet()
         elements.append(Paragraph("Relatorio Financeiro", styles['Heading1']))
-        elements.append(Spacer(1, 0.2*25)) # inch approx
+        elements.append(Spacer(1, 0.2*25)) 
         
         data = [["Resumo", "Valor"], ["Ganhos", f"R$ {summary['income']:.2f}"], ["Gastos", f"R$ {summary['expense']:.2f}"], ["Saldo", f"R$ {summary['income'] - summary['expense']:.2f}"]]
         t = Table(data)
@@ -137,15 +137,14 @@ async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
     except Exception as e: await msg.edit_text(f"Erro: {e}")
 
-# --- SERVIDOR WEB (KOYEB) ---
+# --- SERVIDOR WEB (RENDER) ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "🤖 Finance Bot Online!"
+def home(): return "🤖 Bot Financeiro Online e com Token!"
 def run_flask():
     port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == '__main__':
     threading.Thread(target=run_flask, daemon=True).start()
-    if TELEGRAM_TOKEN:
-        ApplicationBuilder().token(TELEGRAM_TOKEN).build().run_polling()
+    ApplicationBuilder().token(TELEGRAM_TOKEN).build().run_polling()
