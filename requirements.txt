@@ -1,0 +1,4 @@
+reportlab==4.0.7
+python-telegram-bot==21.9
+Flask
+requests
