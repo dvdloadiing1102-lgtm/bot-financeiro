@@ -14,8 +14,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet
 
 # --- CONFIGURAÇÃO ---
-# SEU TOKEN ESTÁ AQUI DIRETO (Para garantir que funciona):
-TELEGRAM_TOKEN = "8314300130:AAGBQJ_7peneVciiSHJxf1E5f-CZbVc7XsU"
+# SEU NOVO TOKEN (Atualizado para eliminar conflitos):
+TELEGRAM_TOKEN = "8314300130:AAHRk_mH3KjeYo3nlCfs1dJLSpoJLPKIzx0"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -140,9 +140,9 @@ async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- SERVIDOR WEB (RENDER) ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "🤖 Bot Financeiro Online e com Token!"
+def home(): return "🤖 Bot Financeiro Online e Atualizado!"
 def run_flask():
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == '__main__':
