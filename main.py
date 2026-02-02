@@ -1,21 +1,21 @@
 import os
 import sqlite3
-import re
 import threading
 import logging
-from datetime import datetime
 from flask import Flask
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, ContextTypes
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# --- SEU TOKEN NOVO JÁ ESTÁ AQUI ---
-TELEGRAM_TOKEN = "8314300130:AAGFjGNp6L6n_8TmvvKIvOsP0bLmX_SSFYc"
+# --- AQUI ESTÁ O SEGREDO ANTI-CONFLITO ---
+# O bot vai tentar pegar a senha do "Cofre" do Render.
+# Se não achar (como no Koyeb), ele usa a senha fixa como reserva.
+TOKEN_FIXO = "8314300130:AAGFjGNp6L6n_8TmvvKIvOsP0bLmX_SSFYc"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", TOKEN_FIXO)
 
-# Configuração de Logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # --- BANCO DE DADOS ---
@@ -40,7 +40,7 @@ class FinanceDatabase:
             c.execute("INSERT INTO users (telegram_id, username) VALUES (?, ?)", (telegram_id, username))
             return c.lastrowid
 
-# --- LÓGICA DO BOT ---
+# --- LÓGICA ---
 class FinanceBot:
     def __init__(self, db_path="finance_bot.db"):
         self.db = FinanceDatabase(db_path)
@@ -77,7 +77,6 @@ class FinanceBot:
         styles = getSampleStyleSheet()
         elements.append(Paragraph("Relatorio Financeiro", styles['Heading1']))
         elements.append(Spacer(1, 20))
-        
         data = [["Resumo", "Valor"], ["Ganhos", f"R$ {summary['income']:.2f}"], ["Gastos", f"R$ {summary['expense']:.2f}"], ["Saldo", f"R$ {summary['income'] - summary['expense']:.2f}"]]
         t = Table(data)
         t.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.black), ('BACKGROUND', (0,0), (-1,0), colors.lightgrey)]))
@@ -86,7 +85,6 @@ class FinanceBot:
 
 bot_logic = FinanceBot()
 
-# --- COMANDOS DO TELEGRAM ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     bot_logic.initialize_user(user.id, user.username)
@@ -127,7 +125,6 @@ async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
     except Exception as e: await msg.edit_text(f"Erro: {e}")
 
-# --- SERVIDOR WEB ---
 app = Flask(__name__)
 @app.route('/')
 def home(): return "Bot Online!"
