@@ -1,6 +1,6 @@
 # ============================================================
-# BOT FINANCEIRO MASTER — TELEGRAM — RENDER READY — ANTI ERROR
-# GANHOS • GASTOS • CATEGORIAS • METAS • RENDAS • ANÁLISES
+# BOT FINANCEIRO MASTER — TELEGRAM — RENDER READY — BLINDADO
+# GANHOS • GASTOS • CATEGORIAS • RENDAS • METAS • ANÁLISE
 # ============================================================
 
 import os
@@ -10,28 +10,6 @@ import sys
 import io
 import csv
 from datetime import datetime
-
-# ===== SAFE IMPORTS (ANTI-CRASH) =====
-
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-except:
-    plt = None
-
-try:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib import colors
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet
-except:
-    A4 = None
-
-try:
-    from openpyxl import Workbook
-except:
-    Workbook = None
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -43,8 +21,9 @@ from telegram.ext import (
 # ================= CONFIG =================
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+
 if not TOKEN:
-    print("❌ TELEGRAM_TOKEN NÃO CONFIGURADO")
+    print("❌ ERRO: TELEGRAM_TOKEN NÃO CONFIGURADO NA RENDER")
     sys.exit()
 
 logging.basicConfig(level=logging.INFO)
@@ -54,12 +33,12 @@ logging.basicConfig(level=logging.INFO)
 (
 SELECT_ACTION,
 GASTO_VALOR, GASTO_CAT, GASTO_DESC,
-GANHO_VALOR, GANHO_CAT, GANHO_DESC,
+GANHO_VALOR, GANHO_CAT,
+DEL_ID,
 NEW_CAT_NAME, NEW_CAT_TYPE,
 META_VALOR,
-RENDA_NOME, RENDA_VALOR,
-DEL_ID
-) = range(13)
+RENDA_NOME, RENDA_VALOR
+) = range(12)
 
 # ================= DATABASE =================
 
@@ -76,20 +55,20 @@ class DB:
             cur = c.cursor()
 
             cur.execute("""CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
                 telegram_id INTEGER UNIQUE,
                 username TEXT
             )""")
 
             cur.execute("""CREATE TABLE IF NOT EXISTS categories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 name TEXT,
                 type TEXT
             )""")
 
             cur.execute("""CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 type TEXT,
                 amount REAL,
@@ -99,13 +78,13 @@ class DB:
             )""")
 
             cur.execute("""CREATE TABLE IF NOT EXISTS metas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 value REAL
             )""")
 
             cur.execute("""CREATE TABLE IF NOT EXISTS rendas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 name TEXT,
                 value REAL,
@@ -242,8 +221,7 @@ def menu():
         [InlineKeyboardButton("🗑️ Lixeira", callback_data="lixeira")]
     ])
 
-
-# ================= START =================
+# ================= HANDLERS =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -252,7 +230,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT_ACTION
 
 
-# ================= ANALISE COMPLETA =================
+# ===== ANÁLISE COMPLETA =====
 
 async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = init_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
@@ -279,7 +257,7 @@ async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT_ACTION
 
 
-# ================= MAIN =================
+# ================= RUN =================
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
@@ -296,5 +274,5 @@ if __name__ == "__main__":
 
     app.add_handler(conv)
 
-    print("🤖 BOT FINANCEIRO MASTER — ONLINE — RENDER OK")
+    print("🤖 BOT FINANCEIRO — ONLINE — RENDER OK")
     app.run_polling(drop_pending_updates=True)
