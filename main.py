@@ -10,11 +10,10 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# --- AQUI ESTÁ O SEGREDO ANTI-CONFLITO ---
-# O bot vai tentar pegar a senha do "Cofre" do Render.
-# Se não achar (como no Koyeb), ele usa a senha fixa como reserva.
-TOKEN_FIXO = "8314300130:AAGFjGNp6L6n_8TmvvKIvOsP0bLmX_SSFYc"
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", TOKEN_FIXO)
+# --- AQUI ESTÁ A CORREÇÃO ---
+# Removemos o comando "os.getenv". 
+# Agora ele é OBRIGADO a usar o token novo:
+TELEGRAM_TOKEN = "8314300130:AAGFjGNp6L6n_8TmvvKIvOsP0bLmX_SSFYc"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
