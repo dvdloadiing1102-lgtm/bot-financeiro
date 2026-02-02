@@ -128,15 +128,6 @@ def menu():
         [InlineKeyboardButton("🌙 Modo Anti Sono", callback_data="toggle_dark")]
     ])
 
-def back_menu():
-    """Botão de voltar para o menu principal"""
-    return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]])
-
-def back_menu_with_actions(buttons):
-    """Adiciona botão de voltar aos botões existentes"""
-    buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")])
-    return InlineKeyboardMarkup(buttons)
-
 # ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -165,25 +156,28 @@ async def toggle_dark_mode_handler(update: Update, context: ContextTypes.DEFAULT
 # ================= GASTO / GANHO =================
 
 async def start_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"type": "expense"}
+    uid = update.callback_query.from_user.id
+    user_state[uid] = {"type": "expense", "step": "value"}
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
     await update.callback_query.edit_message_text("💰 Digite o valor do gasto:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def start_ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"type": "income"}
+    uid = update.callback_query.from_user.id
+    user_state[uid] = {"type": "income", "step": "value"}
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
     await update.callback_query.edit_message_text("💰 Digite o valor do ganho:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def receive_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state:
+    if uid not in user_state or user_state[uid].get("step") != "value":
         return
 
     try:
         val = float(update.message.text.replace(",", "."))
         user_state[uid]["value"] = val
+        user_state[uid]["step"] = "category"
     except:
-        await update.message.reply_text("❌ Valor inválido")
+        await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
         return
 
     ctype = "expense" if user_state[uid]["type"] == "expense" else "income"
@@ -194,8 +188,7 @@ async def receive_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     buttons = [[InlineKeyboardButton(c, callback_data=f"cat_{c}")] for c in cats]
-    # Adiciona opção de cadastrar em todas as categorias
-    buttons.append([InlineKeyboardButton("✅ Usar todas as categorias", callback_data="cat_all")])
+    buttons.append([InlineKeyboardButton("✅ Múltiplas Categorias", callback_data="cat_all")])
     buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")])
     await update.message.reply_text("📂 Escolha categoria:", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -203,19 +196,21 @@ async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
     cat = update.callback_query.data.replace("cat_", "")
     user_state[uid]["category"] = cat
+    user_state[uid]["step"] = "description"
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-    await update.callback_query.edit_message_text("📝 Descrição:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.callback_query.edit_message_text("📝 Digite a descrição:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def choose_category_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Opção para cadastrar em todas as categorias"""
+    """Opção para cadastrar em múltiplas categorias"""
     uid = update.callback_query.from_user.id
     user_state[uid]["category"] = "Múltiplas Categorias"
+    user_state[uid]["step"] = "description"
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-    await update.callback_query.edit_message_text("📝 Descrição:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.callback_query.edit_message_text("📝 Digite a descrição:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def receive_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state:
+    if uid not in user_state or user_state[uid].get("step") != "description":
         return
 
     desc = update.message.text
@@ -224,71 +219,77 @@ async def receive_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_transaction(uid, data["type"], data["value"], data["category"], desc)
     del user_state[uid]
 
-    await update.message.reply_text("✅ Registro salvo", reply_markup=menu())
+    await update.message.reply_text("✅ Registro salvo com sucesso!", reply_markup=menu())
 
 # ================= ADD CATEGORY =================
 
 async def new_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"mode": "newcat"}
+    uid = update.callback_query.from_user.id
+    user_state[uid] = {"mode": "newcat", "step": "name"}
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
     await update.callback_query.edit_message_text("Digite o nome da categoria:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def save_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state or user_state[uid].get("mode") != "newcat":
+    if uid not in user_state or user_state[uid].get("mode") != "newcat" or user_state[uid].get("step") != "name":
         return
 
     name = update.message.text
     user_state[uid]["name"] = name
+    user_state[uid]["step"] = "type"
 
     buttons = [
         [InlineKeyboardButton("📉 Gasto", callback_data="type_expense")],
         [InlineKeyboardButton("📈 Ganho", callback_data="type_income")],
         [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]
     ]
-    await update.message.reply_text("Tipo da categoria:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.message.reply_text("Escolha o tipo da categoria:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def save_cat_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
     
-    if "voltar" in update.callback_query.data:
-        if uid in user_state:
-            del user_state[uid]
-        await update.callback_query.edit_message_text("🤖 Bot Financeiro Premium", reply_markup=menu())
+    if uid not in user_state or user_state[uid].get("mode") != "newcat":
+        await update.callback_query.answer("Erro ao processar", show_alert=True)
         return
     
     ctype = "expense" if "expense" in update.callback_query.data else "income"
+    name = user_state[uid].get("name")
+    
+    if not name:
+        await update.callback_query.answer("Erro: nome da categoria não encontrado", show_alert=True)
+        return
 
-    name = user_state[uid]["name"]
     add_category(uid, name, ctype)
     del user_state[uid]
 
-    await update.callback_query.edit_message_text("✅ Categoria criada", reply_markup=menu())
+    await update.callback_query.edit_message_text("✅ Categoria criada com sucesso!", reply_markup=menu())
 
 # ================= RENDA =================
 
 async def renda_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"mode": "renda"}
+    uid = update.callback_query.from_user.id
+    user_state[uid] = {"mode": "renda", "step": "name"}
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-    await update.callback_query.edit_message_text("Nome da renda:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.callback_query.edit_message_text("Digite o nome da renda:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def renda_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state or user_state[uid].get("mode") != "renda":
+    if uid not in user_state or user_state[uid].get("mode") != "renda" or user_state[uid].get("step") != "name":
         return
     user_state[uid]["name"] = update.message.text
+    user_state[uid]["step"] = "value"
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-    await update.message.reply_text("Valor da renda:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.message.reply_text("Digite o valor da renda:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def renda_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state or user_state[uid].get("mode") != "renda":
+    if uid not in user_state or user_state[uid].get("mode") != "renda" or user_state[uid].get("step") != "value":
         return
     
     try:
         val = float(update.message.text.replace(",", "."))
     except:
-        await update.message.reply_text("❌ Valor inválido")
+        await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
         return
 
     cur.execute("INSERT INTO incomes (user_id, name, value) VALUES (?, ?, ?)",
@@ -296,32 +297,34 @@ async def renda_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
     del user_state[uid]
-    await update.message.reply_text("✅ Renda salva", reply_markup=menu())
+    await update.message.reply_text("✅ Renda salva com sucesso!", reply_markup=menu())
 
 # ================= CUSTO FIXO =================
 
 async def fixed_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"mode": "fixo"}
+    uid = update.callback_query.from_user.id
+    user_state[uid] = {"mode": "fixo", "step": "name"}
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-    await update.callback_query.edit_message_text("Nome do custo fixo:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.callback_query.edit_message_text("Digite o nome do custo fixo:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def fixed_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state or user_state[uid].get("mode") != "fixo":
+    if uid not in user_state or user_state[uid].get("mode") != "fixo" or user_state[uid].get("step") != "name":
         return
     user_state[uid]["name"] = update.message.text
+    user_state[uid]["step"] = "value"
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-    await update.message.reply_text("Valor do custo:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.message.reply_text("Digite o valor do custo:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def fixed_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state or user_state[uid].get("mode") != "fixo":
+    if uid not in user_state or user_state[uid].get("mode") != "fixo" or user_state[uid].get("step") != "value":
         return
     
     try:
         val = float(update.message.text.replace(",", "."))
     except:
-        await update.message.reply_text("❌ Valor inválido")
+        await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
         return
 
     cur.execute("INSERT INTO fixed_costs (user_id, name, value) VALUES (?, ?, ?)",
@@ -329,32 +332,34 @@ async def fixed_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
     del user_state[uid]
-    await update.message.reply_text("✅ Custo fixo cadastrado", reply_markup=menu())
+    await update.message.reply_text("✅ Custo fixo cadastrado com sucesso!", reply_markup=menu())
 
 # ================= META =================
 
 async def meta_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"mode": "meta"}
+    uid = update.callback_query.from_user.id
+    user_state[uid] = {"mode": "meta", "step": "category"}
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-    await update.callback_query.edit_message_text("Categoria da meta:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.callback_query.edit_message_text("Digite a categoria da meta:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def meta_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state or user_state[uid].get("mode") != "meta":
+    if uid not in user_state or user_state[uid].get("mode") != "meta" or user_state[uid].get("step") != "category":
         return
     user_state[uid]["category"] = update.message.text
+    user_state[uid]["step"] = "value"
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-    await update.message.reply_text("Valor limite da meta:", reply_markup=InlineKeyboardMarkup(buttons))
+    await update.message.reply_text("Digite o valor limite da meta:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def meta_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    if uid not in user_state or user_state[uid].get("mode") != "meta":
+    if uid not in user_state or user_state[uid].get("mode") != "meta" or user_state[uid].get("step") != "value":
         return
     
     try:
         val = float(update.message.text.replace(",", "."))
     except:
-        await update.message.reply_text("❌ Valor inválido")
+        await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
         return
 
     cur.execute("INSERT INTO goals (user_id, category, limit_value) VALUES (?, ?, ?)",
@@ -362,7 +367,7 @@ async def meta_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
     del user_state[uid]
-    await update.message.reply_text("🎯 Meta salva", reply_markup=menu())
+    await update.message.reply_text("🎯 Meta salva com sucesso!", reply_markup=menu())
 
 # ================= ANALISE =================
 
@@ -440,7 +445,7 @@ def main():
     app.add_handler(CallbackQueryHandler(analise, pattern="^analise$"))
     app.add_handler(CallbackQueryHandler(historico, pattern="^historico$"))
 
-    # Handlers para mensagens de texto
+    # Handlers para mensagens de texto (com verificação de step)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_value))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_desc))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_cat))
