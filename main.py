@@ -39,6 +39,7 @@ class FinanceDatabase:
             c.execute("""CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, telegram_id INTEGER UNIQUE, username TEXT)""")
             c.execute("""CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)""")
             c.execute("""CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY, user_id INTEGER, type TEXT, amount REAL, category TEXT, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            conn.commit()
 
     def get_user_id(self, telegram_id, username):
         with self.get_connection() as conn:
@@ -47,6 +48,7 @@ class FinanceDatabase:
             res = c.fetchone()
             if res: return res[0]
             c.execute("INSERT INTO users (telegram_id, username) VALUES (?, ?)", (telegram_id, username or "Usuario"))
+            conn.commit()
             return c.lastrowid
 
 # --- LÓGICA DO BOT ---
@@ -58,20 +60,22 @@ class FinanceBot:
         uid = self.db.get_user_id(telegram_id, username)
         with self.db.get_connection() as conn:
             c = conn.cursor()
-            # Se não tiver categorias, cria as básicas
             c.execute("SELECT id FROM categories WHERE user_id = ?", (uid,))
             if not c.fetchone():
                 cats = ["Alimentacao", "Transporte", "Lazer", "Contas", "Mercado"]
                 for name in cats: c.execute("INSERT INTO categories (user_id, name) VALUES (?, ?)", (uid, name))
+                conn.commit()
         return uid
 
     def add_category(self, uid, name):
         with self.db.get_connection() as conn:
             conn.cursor().execute("INSERT INTO categories (user_id, name) VALUES (?, ?)", (uid, name))
+            conn.commit()
 
     def delete_category(self, uid, name):
         with self.db.get_connection() as conn:
             conn.cursor().execute("DELETE FROM categories WHERE user_id = ? AND name = ?", (uid, name))
+            conn.commit()
 
     def get_categories(self, uid):
         with self.db.get_connection() as conn:
@@ -81,9 +85,9 @@ class FinanceBot:
     def add_transaction(self, uid, type_, amount, category, desc):
         with self.db.get_connection() as conn:
             conn.cursor().execute("INSERT INTO transactions (user_id, type, amount, category, description) VALUES (?, ?, ?, ?, ?)", (uid, type_, amount, category, desc))
+            conn.commit()
 
     def get_detailed_list(self, uid):
-        # Retorna lista com ID para poder deletar específico
         with self.db.get_connection() as conn:
             return conn.cursor().execute("SELECT id, type, amount, category, description, created_at FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT 20", (uid,)).fetchall()
 
@@ -93,6 +97,7 @@ class FinanceBot:
             c.execute("SELECT id FROM transactions WHERE id = ? AND user_id = ?", (trans_id, uid))
             if c.fetchone():
                 c.execute("DELETE FROM transactions WHERE id = ?", (trans_id,))
+                conn.commit()
                 return True
         return False
 
@@ -101,9 +106,9 @@ class FinanceBot:
             if period == 'all':
                 conn.cursor().execute("DELETE FROM transactions WHERE user_id = ?", (uid,))
             elif period == 'month':
-                # Apaga só do mês atual
                 current_month = datetime.now().strftime('%Y-%m')
                 conn.cursor().execute("DELETE FROM transactions WHERE user_id = ? AND strftime('%Y-%m', created_at) = ?", (uid, current_month))
+            conn.commit()
 
     def get_summary(self, uid):
         with self.db.get_connection() as conn:
@@ -138,9 +143,9 @@ bot_logic = FinanceBot()
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     bot_logic.initialize_user(user.id, user.username)
-    await show_main_menu(update)
+    await show_main_menu(update, context)
 
-async def show_main_menu(update):
+async def show_main_menu(update, context):
     keyboard = [
         [InlineKeyboardButton("🔍 Análise Detalhada", callback_data='menu_analise')],
         [InlineKeyboardButton("📂 Categorias", callback_data='menu_cats'), InlineKeyboardButton("🗑️ Lixeira", callback_data='menu_lixeira')],
@@ -167,7 +172,6 @@ async def detailed_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     report = "📋 <b>ÚLTIMAS TRANSAÇÕES:</b>\n\n"
     for item in items:
-        # item: id, type, amount, cat, desc, date
         icon = "🟢" if item[1] == 'income' else "🔴"
         report += f"🆔 <b>{item[0]}</b> | {icon} R$ {item[2]:.2f}\n"
         report += f"📝 <i>{item[4]}</i> ({item[3]})\n"
@@ -202,7 +206,7 @@ async def save_new_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
     bot_logic.add_category(uid, text)
     await update.message.reply_text(f"✅ Categoria <b>{text}</b> adicionada!", parse_mode=ParseMode.HTML)
-    await show_main_menu(update)
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
 async def prompt_del_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -214,10 +218,10 @@ async def delete_existing_cat(update: Update, context: ContextTypes.DEFAULT_TYPE
     uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
     bot_logic.delete_category(uid, text)
     await update.message.reply_text(f"✅ Categoria <b>{text}</b> removida (se existia).", parse_mode=ParseMode.HTML)
-    await show_main_menu(update)
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
-# --- LIXEIRA (DELETAR TUDO OU ESPECÍFICO) ---
+# --- LIXEIRA ---
 async def menu_lixeira(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🗑️ Apagar item pelo ID", callback_data='del_id')],
@@ -242,7 +246,7 @@ async def execute_del_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Erro: Digite apenas o número.")
     
-    await show_main_menu(update)
+    await show_main_menu(update, context)
     return ConversationHandler.END
 
 async def execute_del_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -278,7 +282,6 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         val = float(context.args[0].replace(',', '.'))
         desc = " ".join(context.args[1:]) if len(context.args) > 1 else "Gasto"
         uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
-        # Tenta adivinhar categoria ou usa "Geral"
         cat = "Alimentacao" if "ifood" in desc.lower() or "mercado" in desc.lower() else "Geral"
         bot_logic.add_transaction(uid, "expense", val, cat, desc)
         await update.message.reply_text(f"📉 Gasto de <b>R$ {val:.2f}</b> ({desc}) salvo!", parse_mode=ParseMode.HTML)
@@ -334,7 +337,6 @@ if __name__ == '__main__':
     threading.Thread(target=run_flask, daemon=True).start()
     app_bot = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    # Handlers de Conversa (Para quando o bot pergunta e você responde)
     conv_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(prompt_add_cat, pattern='^add_cat$'),
@@ -355,7 +357,6 @@ if __name__ == '__main__':
     app_bot.add_handler(CommandHandler("ganho", ganho))
     app_bot.add_handler(CommandHandler("extrato", simple_extrato))
     
-    # Menu Navigation
     app_bot.add_handler(CallbackQueryHandler(show_main_menu, pattern='^main_menu$'))
     app_bot.add_handler(CallbackQueryHandler(detailed_analysis, pattern='^menu_analise$'))
     app_bot.add_handler(CallbackQueryHandler(menu_cats, pattern='^menu_cats$'))
