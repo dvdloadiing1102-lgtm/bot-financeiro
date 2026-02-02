@@ -14,8 +14,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet
 
 # --- CONFIGURAÇÃO ---
-# SEU NOVO TOKEN (Atualizado para eliminar conflitos):
-TELEGRAM_TOKEN = "8314300130:AAHRk_mH3KjeYo3nlCfs1dJLSpoJLPKIzx0"
+# AGORA O TOKEN VEM DO COFRE DO RENDER (O Koyeb não consegue ler isso):
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -140,7 +140,7 @@ async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- SERVIDOR WEB (RENDER) ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "🤖 Bot Financeiro Online e Atualizado!"
+def home(): return "🤖 Bot Financeiro Online!"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
