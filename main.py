@@ -100,15 +100,52 @@ def get_categories(uid, ctype):
     return [x[0] for x in cur.fetchall()]
 
 def add_category(uid, name, ctype):
-    cur.execute("INSERT INTO categories (user_id, name, type) VALUES (?, ?, ?)", (uid, name, ctype))
-    conn.commit()
+    try:
+        cur.execute("INSERT INTO categories (user_id, name, type) VALUES (?, ?, ?)", (uid, name, ctype))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao adicionar categoria: {e}")
+        return False
 
 def add_transaction(uid, t, amount, cat, desc):
-    cur.execute("""
-        INSERT INTO transactions (user_id, type, amount, category, description, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (uid, t, amount, cat, desc, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
+    try:
+        cur.execute("""
+            INSERT INTO transactions (user_id, type, amount, category, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (uid, t, amount, cat, desc, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao adicionar transação: {e}")
+        return False
+
+def add_income(uid, name, value):
+    try:
+        cur.execute("INSERT INTO incomes (user_id, name, value) VALUES (?, ?, ?)", (uid, name, value))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao adicionar renda: {e}")
+        return False
+
+def add_fixed_cost(uid, name, value):
+    try:
+        cur.execute("INSERT INTO fixed_costs (user_id, name, value) VALUES (?, ?, ?)", (uid, name, value))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao adicionar custo fixo: {e}")
+        return False
+
+def add_goal(uid, category, limit_value):
+    try:
+        cur.execute("INSERT INTO goals (user_id, category, limit_value) VALUES (?, ?, ?)", (uid, category, limit_value))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao adicionar meta: {e}")
+        return False
 
 # ================= MENU =================
 
@@ -167,6 +204,8 @@ async def start_ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
+    if uid not in user_state:
+        return
     cat = update.callback_query.data.replace("cat_", "")
     user_state[uid]["category"] = cat
     user_state[uid]["step"] = "description"
@@ -175,6 +214,8 @@ async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def choose_category_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
+    if uid not in user_state:
+        return
     user_state[uid]["category"] = "Múltiplas Categorias"
     user_state[uid]["step"] = "description"
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
@@ -192,17 +233,21 @@ async def save_cat_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
     
     if uid not in user_state or user_state[uid].get("mode") != "newcat":
+        await update.callback_query.answer("Sessão expirada", show_alert=True)
         return
     
     ctype = "expense" if "expense" in update.callback_query.data else "income"
     name = user_state[uid].get("name")
     
-    if name:
-        add_category(uid, name, ctype)
+    if not name:
+        await update.callback_query.answer("Erro: nome não encontrado", show_alert=True)
+        return
+    
+    if add_category(uid, name, ctype):
         del user_state[uid]
         await update.callback_query.edit_message_text("✅ Categoria criada com sucesso!", reply_markup=menu())
     else:
-        await update.callback_query.answer("Erro ao processar", show_alert=True)
+        await update.callback_query.answer("❌ Erro ao criar categoria", show_alert=True)
 
 # ================= RENDA =================
 
@@ -232,7 +277,7 @@ async def meta_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
-    text = update.message.text
+    text = update.message.text.strip()
     
     if uid not in user_state:
         return
@@ -241,9 +286,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     step = state.get("step")
     mode = state.get("mode")
     
-    # ===== GASTO/GANHO =====
-    if step == "value" and mode is None:
-        try:
+    print(f"User {uid} - Mode: {mode}, Step: {step}, Text: {text}")
+    
+    try:
+        # ===== GASTO/GANHO - VALOR =====
+        if step == "value" and mode is None:
             val = float(text.replace(",", "."))
             state["value"] = val
             state["step"] = "category"
@@ -260,81 +307,82 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             buttons.append([InlineKeyboardButton("✅ Múltiplas Categorias", callback_data="cat_all")])
             buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")])
             await update.message.reply_text("📂 Escolha categoria:", reply_markup=InlineKeyboardMarkup(buttons))
-        except:
-            await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
-    
-    elif step == "description" and mode is None:
-        if "value" in state and "category" in state:
-            add_transaction(uid, state["type"], state["value"], state["category"], text)
-            del user_state[uid]
-            await update.message.reply_text("✅ Registro salvo com sucesso!", reply_markup=menu())
-        else:
-            await update.message.reply_text("❌ Erro ao processar")
-    
-    # ===== CATEGORIA =====
-    elif step == "name" and mode == "newcat":
-        state["name"] = text
-        state["step"] = "type"
-        buttons = [
-            [InlineKeyboardButton("📉 Gasto", callback_data="type_expense")],
-            [InlineKeyboardButton("📈 Ganho", callback_data="type_income")],
-            [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]
-        ]
-        await update.message.reply_text("Escolha o tipo da categoria:", reply_markup=InlineKeyboardMarkup(buttons))
-    
-    # ===== RENDA =====
-    elif step == "name" and mode == "renda":
-        state["name"] = text
-        state["step"] = "value"
-        buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-        await update.message.reply_text("Digite o valor da renda:", reply_markup=InlineKeyboardMarkup(buttons))
-    
-    elif step == "value" and mode == "renda":
-        try:
+        
+        # ===== GASTO/GANHO - DESCRIÇÃO =====
+        elif step == "description" and mode is None:
+            if "value" in state and "category" in state:
+                if add_transaction(uid, state["type"], state["value"], state["category"], text):
+                    del user_state[uid]
+                    await update.message.reply_text("✅ Registro salvo com sucesso!", reply_markup=menu())
+                else:
+                    await update.message.reply_text("❌ Erro ao salvar. Tente novamente.", reply_markup=menu())
+            else:
+                await update.message.reply_text("❌ Erro ao processar", reply_markup=menu())
+        
+        # ===== CATEGORIA - NOME =====
+        elif step == "name" and mode == "newcat":
+            state["name"] = text
+            state["step"] = "type"
+            buttons = [
+                [InlineKeyboardButton("📉 Gasto", callback_data="type_expense")],
+                [InlineKeyboardButton("📈 Ganho", callback_data="type_income")],
+                [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]
+            ]
+            await update.message.reply_text("Escolha o tipo da categoria:", reply_markup=InlineKeyboardMarkup(buttons))
+        
+        # ===== RENDA - NOME =====
+        elif step == "name" and mode == "renda":
+            state["name"] = text
+            state["step"] = "value"
+            buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
+            await update.message.reply_text("Digite o valor da renda:", reply_markup=InlineKeyboardMarkup(buttons))
+        
+        # ===== RENDA - VALOR =====
+        elif step == "value" and mode == "renda":
             val = float(text.replace(",", "."))
-            cur.execute("INSERT INTO incomes (user_id, name, value) VALUES (?, ?, ?)",
-                        (uid, state["name"], val))
-            conn.commit()
-            del user_state[uid]
-            await update.message.reply_text("✅ Renda salva com sucesso!", reply_markup=menu())
-        except:
-            await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
-    
-    # ===== CUSTO FIXO =====
-    elif step == "name" and mode == "fixo":
-        state["name"] = text
-        state["step"] = "value"
-        buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-        await update.message.reply_text("Digite o valor do custo:", reply_markup=InlineKeyboardMarkup(buttons))
-    
-    elif step == "value" and mode == "fixo":
-        try:
+            if add_income(uid, state["name"], val):
+                del user_state[uid]
+                await update.message.reply_text("✅ Renda salva com sucesso!", reply_markup=menu())
+            else:
+                await update.message.reply_text("❌ Erro ao salvar. Tente novamente.", reply_markup=menu())
+        
+        # ===== CUSTO FIXO - NOME =====
+        elif step == "name" and mode == "fixo":
+            state["name"] = text
+            state["step"] = "value"
+            buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
+            await update.message.reply_text("Digite o valor do custo:", reply_markup=InlineKeyboardMarkup(buttons))
+        
+        # ===== CUSTO FIXO - VALOR =====
+        elif step == "value" and mode == "fixo":
             val = float(text.replace(",", "."))
-            cur.execute("INSERT INTO fixed_costs (user_id, name, value) VALUES (?, ?, ?)",
-                        (uid, state["name"], val))
-            conn.commit()
-            del user_state[uid]
-            await update.message.reply_text("✅ Custo fixo cadastrado com sucesso!", reply_markup=menu())
-        except:
-            await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
-    
-    # ===== META =====
-    elif step == "category" and mode == "meta":
-        state["category"] = text
-        state["step"] = "value"
-        buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
-        await update.message.reply_text("Digite o valor limite da meta:", reply_markup=InlineKeyboardMarkup(buttons))
-    
-    elif step == "value" and mode == "meta":
-        try:
+            if add_fixed_cost(uid, state["name"], val):
+                del user_state[uid]
+                await update.message.reply_text("✅ Custo fixo cadastrado com sucesso!", reply_markup=menu())
+            else:
+                await update.message.reply_text("❌ Erro ao salvar. Tente novamente.", reply_markup=menu())
+        
+        # ===== META - CATEGORIA =====
+        elif step == "category" and mode == "meta":
+            state["category"] = text
+            state["step"] = "value"
+            buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
+            await update.message.reply_text("Digite o valor limite da meta:", reply_markup=InlineKeyboardMarkup(buttons))
+        
+        # ===== META - VALOR =====
+        elif step == "value" and mode == "meta":
             val = float(text.replace(",", "."))
-            cur.execute("INSERT INTO goals (user_id, category, limit_value) VALUES (?, ?, ?)",
-                        (uid, state["category"], val))
-            conn.commit()
-            del user_state[uid]
-            await update.message.reply_text("🎯 Meta salva com sucesso!", reply_markup=menu())
-        except:
-            await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
+            if add_goal(uid, state["category"], val):
+                del user_state[uid]
+                await update.message.reply_text("🎯 Meta salva com sucesso!", reply_markup=menu())
+            else:
+                await update.message.reply_text("❌ Erro ao salvar. Tente novamente.", reply_markup=menu())
+    
+    except ValueError:
+        await update.message.reply_text("❌ Valor inválido. Digite um número válido.")
+    except Exception as e:
+        print(f"Erro: {e}")
+        await update.message.reply_text(f"❌ Erro ao processar: {str(e)}")
 
 # ================= ANALISE =================
 
@@ -343,6 +391,11 @@ async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cur.execute("SELECT type, amount, category, description, created_at FROM transactions WHERE user_id=?", (uid,))
     rows = cur.fetchall()
+
+    if not rows:
+        buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
+        await update.callback_query.edit_message_text("📭 Sem transações registradas", reply_markup=InlineKeyboardMarkup(buttons))
+        return
 
     total_inc = sum(r[1] for r in rows if r[0] == "income")
     total_exp = sum(r[1] for r in rows if r[0] == "expense")
@@ -400,7 +453,7 @@ def main():
     app.add_handler(CallbackQueryHandler(analise, pattern="^analise$"))
     app.add_handler(CallbackQueryHandler(historico, pattern="^historico$"))
 
-    # Text handler - ÚNICO para todos os textos
+    # Text handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     print("🤖 FINANCEIRO PREMIUM ONLINE")
