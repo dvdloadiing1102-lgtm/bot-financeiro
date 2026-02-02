@@ -4,7 +4,6 @@ import re
 import threading
 import logging
 from datetime import datetime
-from dataclasses import dataclass
 from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -13,14 +12,13 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# --- CONFIGURAÇÃO ---
-# AGORA O TOKEN VEM DO COFRE DO RENDER (O Koyeb não consegue ler isso):
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# --- SEU TOKEN NOVO E ATUALIZADO ---
+TELEGRAM_TOKEN = "8314300130:AAHRk_mH3KjeYo3nlCfs1dJLSpoJLPKIzx0"
 
+# Configuração de Logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- BANCO DE DADOS E LÓGICA ---
-
+# --- BANCO DE DADOS ---
 class FinanceDatabase:
     def __init__(self, db_path="finance_bot.db"):
         self.db_path = db_path
@@ -42,6 +40,7 @@ class FinanceDatabase:
             c.execute("INSERT INTO users (telegram_id, username) VALUES (?, ?)", (telegram_id, username))
             return c.lastrowid
 
+# --- LÓGICA DO BOT ---
 class FinanceBot:
     def __init__(self, db_path="finance_bot.db"):
         self.db = FinanceDatabase(db_path)
@@ -77,31 +76,23 @@ class FinanceBot:
         elements = []
         styles = getSampleStyleSheet()
         elements.append(Paragraph("Relatorio Financeiro", styles['Heading1']))
-        elements.append(Spacer(1, 0.2*25)) 
+        elements.append(Spacer(1, 20))
         
         data = [["Resumo", "Valor"], ["Ganhos", f"R$ {summary['income']:.2f}"], ["Gastos", f"R$ {summary['expense']:.2f}"], ["Saldo", f"R$ {summary['income'] - summary['expense']:.2f}"]]
         t = Table(data)
-        t.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.black), ('BACKGROUND', (0,0), (-1,0), colors.grey)]))
+        t.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.black), ('BACKGROUND', (0,0), (-1,0), colors.lightgrey)]))
         elements.append(t)
-        elements.append(Spacer(1, 0.2*25))
-        
-        cat_data = [["Categoria", "Total"]]
-        for k, v in summary["cats"].items():
-            clean_k = re.sub(r'[^\w\s]', '', k) 
-            cat_data.append([clean_k, f"R$ {v:.2f}"])
-        t2 = Table(cat_data)
-        t2.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.black)]))
-        elements.append(t2)
         doc.build(elements)
 
-# --- TELEGRAM HANDLERS ---
 bot_logic = FinanceBot()
 
+# --- COMANDOS DO TELEGRAM ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     bot_logic.initialize_user(user.id, user.username)
-    msg = (f"👋 Olá {user.first_name}!\n\n💸 **COMANDOS:**\n`/gasto 50.00 Mercado`\n`/ganho 2000.00 Salario`\n`/extrato`\n`/pdf`")
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    # TIREI O MARKDOWN PARA EVITAR ERROS
+    msg = (f"Ola {user.first_name}!\n\nCOMANDOS:\n/gasto 50.00 Mercado\n/ganho 2000.00 Salario\n/extrato\n/pdf")
+    await update.message.reply_text(msg)
 
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -109,25 +100,25 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cat = context.args[1] if len(context.args) > 1 else "Geral"
         uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
         bot_logic.add_transaction(uid, "expense", val, cat, "Gasto")
-        await update.message.reply_text(f"✅ Gasto de R$ {val:.2f} em {cat} salvo!")
-    except: await update.message.reply_text("❌ Use: `/gasto 50.00 Mercado`", parse_mode='Markdown')
+        await update.message.reply_text(f"Gasto de R$ {val:.2f} em {cat} salvo!")
+    except: await update.message.reply_text("Use assim: /gasto 50.00 Mercado")
 
 async def ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         val = float(context.args[0].replace(',', '.'))
         uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
         bot_logic.add_transaction(uid, "income", val, "Salario", "Ganho")
-        await update.message.reply_text(f"✅ Ganho de R$ {val:.2f} salvo!")
-    except: await update.message.reply_text("❌ Use: `/ganho 2000.00`", parse_mode='Markdown')
+        await update.message.reply_text(f"Ganho de R$ {val:.2f} salvo!")
+    except: await update.message.reply_text("Use assim: /ganho 2000.00")
 
 async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
     s = bot_logic.get_summary(uid)
-    msg = f"📊 **RESUMO**\n\n💰 Entrou: R$ {s['income']:.2f}\n💸 Saiu: R$ {s['expense']:.2f}\n🟢 Saldo: R$ {s['income'] - s['expense']:.2f}"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    msg = f"RESUMO\n\nEntrou: R$ {s['income']:.2f}\nSaiu: R$ {s['expense']:.2f}\nSaldo: R$ {s['income'] - s['expense']:.2f}"
+    await update.message.reply_text(msg)
 
 async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Gerando PDF...")
+    msg = await update.message.reply_text("Gerando PDF...")
     uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
     fname = f"relatorio_{uid}.pdf"
     try:
@@ -137,10 +128,10 @@ async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
     except Exception as e: await msg.edit_text(f"Erro: {e}")
 
-# --- SERVIDOR WEB (RENDER) ---
+# --- SERVIDOR WEB ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "🤖 Bot Financeiro Online!"
+def home(): return "Bot Online e Configurado!"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
