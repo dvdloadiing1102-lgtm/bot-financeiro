@@ -1,5 +1,5 @@
 # ============================================================
-# BOT FINANCEIRO MASTER — TELEGRAM — RENDER READY (FIXED)
+# BOT FINANCEIRO MASTER — TELEGRAM — RENDER READY — ANTI ERROR
 # GANHOS • GASTOS • CATEGORIAS • METAS • RENDAS • ANÁLISES
 # ============================================================
 
@@ -11,17 +11,34 @@ import io
 import csv
 from datetime import datetime
 
+# ===== SAFE IMPORTS (ANTI-CRASH) =====
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except:
+    plt = None
+
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+except:
+    A4 = None
+
+try:
+    from openpyxl import Workbook
+except:
+    Workbook = None
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
     CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 )
-
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
 
 # ================= CONFIG =================
 
@@ -37,11 +54,12 @@ logging.basicConfig(level=logging.INFO)
 (
 SELECT_ACTION,
 GASTO_VALOR, GASTO_CAT, GASTO_DESC,
-GANHO_VALOR, GANHO_CAT,
+GANHO_VALOR, GANHO_CAT, GANHO_DESC,
 NEW_CAT_NAME, NEW_CAT_TYPE,
 META_VALOR,
-RENDA_NOME, RENDA_VALOR
-) = range(10)
+RENDA_NOME, RENDA_VALOR,
+DEL_ID
+) = range(13)
 
 # ================= DATABASE =================
 
@@ -58,20 +76,20 @@ class DB:
             cur = c.cursor()
 
             cur.execute("""CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER UNIQUE,
                 username TEXT
             )""")
 
             cur.execute("""CREATE TABLE IF NOT EXISTS categories (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 name TEXT,
                 type TEXT
             )""")
 
             cur.execute("""CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 type TEXT,
                 amount REAL,
@@ -81,13 +99,13 @@ class DB:
             )""")
 
             cur.execute("""CREATE TABLE IF NOT EXISTS metas (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 value REAL
             )""")
 
             cur.execute("""CREATE TABLE IF NOT EXISTS rendas (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 name TEXT,
                 value REAL,
@@ -188,6 +206,22 @@ def get_summary(uid):
     return summary
 
 
+def get_last(uid):
+    with db.conn() as c:
+        return c.cursor().execute(
+            "SELECT id, type, amount, category, description FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 20",
+            (uid,)
+        ).fetchall()
+
+
+def delete_tx(uid, tid):
+    with db.conn() as c:
+        cur = c.cursor()
+        cur.execute("DELETE FROM transactions WHERE id=? AND user_id=?", (tid, uid))
+        c.commit()
+        return cur.rowcount > 0
+
+
 # ================= UI =================
 
 def menu():
@@ -200,21 +234,25 @@ def menu():
 
         [InlineKeyboardButton("🎯 Definir Meta", callback_data="meta")],
 
-        [InlineKeyboardButton("📊 Análise Completa", callback_data="analise")],
+        [InlineKeyboardButton("📊 Saldo", callback_data="saldo"),
+         InlineKeyboardButton("📊 Análise Completa", callback_data="analise")],
 
-        [InlineKeyboardButton("📄 Exportar CSV", callback_data="exportar")]
+        [InlineKeyboardButton("📋 Histórico", callback_data="detalhes")],
+
+        [InlineKeyboardButton("🗑️ Lixeira", callback_data="lixeira")]
     ])
 
-# ================= HANDLERS =================
+
+# ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     init_user(user.id, user.username)
-    await update.message.reply_text("👋 Bot Financeiro Master ativo!", reply_markup=menu())
+    await update.message.reply_text(f"👋 Olá {user.first_name}!", reply_markup=menu())
     return SELECT_ACTION
 
 
-# ===== ANALISE COMPLETA =====
+# ================= ANALISE COMPLETA =================
 
 async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = init_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
@@ -241,7 +279,7 @@ async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT_ACTION
 
 
-# ================= RUN =================
+# ================= MAIN =================
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
