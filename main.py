@@ -12,8 +12,8 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# --- SEU TOKEN NOVO E ATUALIZADO ---
-TELEGRAM_TOKEN = "8314300130:AAHRk_mH3KjeYo3nlCfs1dJLSpoJLPKIzx0"
+# --- SEU TOKEN NOVO JÁ ESTÁ AQUI ---
+TELEGRAM_TOKEN = "8314300130:AAGFjGNp6L6n_8TmvvKIvOsP0bLmX_SSFYc"
 
 # Configuração de Logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -90,7 +90,6 @@ bot_logic = FinanceBot()
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     bot_logic.initialize_user(user.id, user.username)
-    # TIREI O MARKDOWN PARA EVITAR ERROS
     msg = (f"Ola {user.first_name}!\n\nCOMANDOS:\n/gasto 50.00 Mercado\n/ganho 2000.00 Salario\n/extrato\n/pdf")
     await update.message.reply_text(msg)
 
@@ -131,7 +130,7 @@ async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- SERVIDOR WEB ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot Online e Configurado!"
+def home(): return "Bot Online!"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
