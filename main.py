@@ -8,7 +8,7 @@ from telegram.ext import (
 )
 import threading
 import time
-import requests
+import urllib.request
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
@@ -23,10 +23,10 @@ def keep_alive():
     while True:
         try:
             time.sleep(300)  # A cada 5 minutos
-            response = requests.get(RENDER_URL, timeout=5)
-            print(f"✅ Keep-alive ping: {response.status_code}")
+            urllib.request.urlopen(RENDER_URL, timeout=5)
+            print(f"✅ Keep-alive ping realizado!")
         except Exception as e:
-            print(f"⚠️ Keep-alive erro: {e}")
+            print(f"⚠️ Keep-alive: {e}")
 
 # ================= DATABASE =================
 
@@ -259,15 +259,12 @@ async def toggle_dark_mode_handler(update: Update, context: ContextTypes.DEFAULT
 async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
     
-    # Transações
     cur.execute("SELECT type, amount FROM transactions WHERE user_id=?", (uid,))
     trans_rows = cur.fetchall()
     
-    # Rendas
     cur.execute("SELECT value FROM incomes WHERE user_id=?", (uid,))
     income_rows = cur.fetchall()
     
-    # Custos fixos
     cur.execute("SELECT value FROM fixed_costs WHERE user_id=?", (uid,))
     fixed_rows = cur.fetchall()
     
@@ -506,7 +503,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = state.get("mode")
     
     try:
-        # ===== GASTO/GANHO - VALOR =====
         if step == "value" and mode is None:
             val = float(text.replace(",", "."))
             state["value"] = val
@@ -525,7 +521,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")])
             await update.message.reply_text("📂 Escolha categoria:", reply_markup=InlineKeyboardMarkup(buttons))
         
-        # ===== GASTO/GANHO - DESCRIÇÃO =====
         elif step == "description" and mode is None:
             if "value" in state and "category" in state:
                 if add_transaction(uid, state["type"], state["value"], state["category"], text):
@@ -536,7 +531,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("❌ Erro ao processar", reply_markup=menu())
         
-        # ===== CATEGORIA - NOME =====
         elif step == "name" and mode == "newcat":
             state["name"] = text
             state["step"] = "type"
@@ -547,14 +541,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             await update.message.reply_text("Escolha o tipo da categoria:", reply_markup=InlineKeyboardMarkup(buttons))
         
-        # ===== RENDA - NOME =====
         elif step == "name" and mode == "renda":
             state["name"] = text
             state["step"] = "value"
             buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
             await update.message.reply_text("Digite o valor da renda:", reply_markup=InlineKeyboardMarkup(buttons))
         
-        # ===== RENDA - VALOR =====
         elif step == "value" and mode == "renda":
             val = float(text.replace(",", "."))
             if add_income(uid, state["name"], val):
@@ -563,14 +555,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("❌ Erro ao salvar. Tente novamente.", reply_markup=menu())
         
-        # ===== CUSTO FIXO - NOME =====
         elif step == "name" and mode == "fixo":
             state["name"] = text
             state["step"] = "value"
             buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
             await update.message.reply_text("Digite o valor do custo:", reply_markup=InlineKeyboardMarkup(buttons))
         
-        # ===== CUSTO FIXO - VALOR =====
         elif step == "value" and mode == "fixo":
             val = float(text.replace(",", "."))
             if add_fixed_cost(uid, state["name"], val):
@@ -579,14 +569,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("❌ Erro ao salvar. Tente novamente.", reply_markup=menu())
         
-        # ===== META - CATEGORIA =====
         elif step == "category" and mode == "meta":
             state["category"] = text
             state["step"] = "value"
             buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
             await update.message.reply_text("Digite o valor limite da meta:", reply_markup=InlineKeyboardMarkup(buttons))
         
-        # ===== META - VALOR =====
         elif step == "value" and mode == "meta":
             val = float(text.replace(",", "."))
             if add_goal(uid, state["category"], val):
@@ -617,7 +605,6 @@ async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_inc = sum(r[2] for r in rows if r[1] == "income")
     total_exp = sum(r[2] for r in rows if r[1] == "expense")
     
-    # Análise por categoria
     cat_analysis = {}
     for r in rows:
         cat = r[3]
@@ -684,7 +671,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
 
-    # Callback handlers
     app.add_handler(CallbackQueryHandler(voltar, pattern="^voltar$"))
     app.add_handler(CallbackQueryHandler(toggle_dark_mode_handler, pattern="^toggle_dark$"))
     app.add_handler(CallbackQueryHandler(start_gasto, pattern="^gasto$"))
@@ -701,7 +687,6 @@ def main():
     app.add_handler(CallbackQueryHandler(saldo, pattern="^saldo$"))
     app.add_handler(CallbackQueryHandler(gerenciar, pattern="^gerenciar$"))
     
-    # Delete handlers
     app.add_handler(CallbackQueryHandler(del_trans, pattern="^del_trans$"))
     app.add_handler(CallbackQueryHandler(del_income, pattern="^del_income$"))
     app.add_handler(CallbackQueryHandler(del_cat, pattern="^del_cat$"))
@@ -714,17 +699,14 @@ def main():
     app.add_handler(CallbackQueryHandler(delfixed_confirm, pattern="^delfixed_"))
     app.add_handler(CallbackQueryHandler(delgoal_confirm, pattern="^delgoal_"))
 
-    # Text handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     print("🤖 FINANCEIRO PREMIUM ONLINE - KEEP ALIVE ATIVADO")
     app.run_polling()
 
 if __name__ == "__main__":
-    # Inicia thread de keep-alive
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
     print("✅ Keep-Alive iniciado!")
     
-    # Inicia o bot
     main()
