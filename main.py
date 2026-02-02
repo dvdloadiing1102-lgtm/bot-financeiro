@@ -6,10 +6,27 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, ContextTypes, filters
 )
+import threading
+import time
+import requests
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
     raise RuntimeError("Configure TELEGRAM_TOKEN na Render")
+
+# ================= KEEP ALIVE PARA RENDER =================
+
+RENDER_URL = os.getenv("RENDER_URL", "https://bot-financeiro-hu1p.onrender.com")
+
+def keep_alive():
+    """Função para manter o bot acordado no Render"""
+    while True:
+        try:
+            time.sleep(300)  # A cada 5 minutos
+            response = requests.get(RENDER_URL, timeout=5)
+            print(f"✅ Keep-alive ping: {response.status_code}")
+        except Exception as e:
+            print(f"⚠️ Keep-alive erro: {e}")
 
 # ================= DATABASE =================
 
@@ -50,7 +67,8 @@ CREATE TABLE IF NOT EXISTS incomes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     name TEXT,
-    value REAL
+    value REAL,
+    created_at TEXT
 )
 """)
 
@@ -122,7 +140,8 @@ def add_transaction(uid, t, amount, cat, desc):
 
 def add_income(uid, name, value):
     try:
-        cur.execute("INSERT INTO incomes (user_id, name, value) VALUES (?, ?, ?)", (uid, name, value))
+        cur.execute("INSERT INTO incomes (user_id, name, value, created_at) VALUES (?, ?, ?, ?)", 
+                    (uid, name, value, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit()
         return True
     except Exception as e:
@@ -147,6 +166,51 @@ def add_goal(uid, category, limit_value):
         print(f"Erro ao adicionar meta: {e}")
         return False
 
+def delete_transaction(tid):
+    try:
+        cur.execute("DELETE FROM transactions WHERE id=?", (tid,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao deletar transação: {e}")
+        return False
+
+def delete_income(iid):
+    try:
+        cur.execute("DELETE FROM incomes WHERE id=?", (iid,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao deletar renda: {e}")
+        return False
+
+def delete_category(cid):
+    try:
+        cur.execute("DELETE FROM categories WHERE id=?", (cid,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao deletar categoria: {e}")
+        return False
+
+def delete_fixed_cost(fcid):
+    try:
+        cur.execute("DELETE FROM fixed_costs WHERE id=?", (fcid,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao deletar custo fixo: {e}")
+        return False
+
+def delete_goal(gid):
+    try:
+        cur.execute("DELETE FROM goals WHERE id=?", (gid,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao deletar meta: {e}")
+        return False
+
 # ================= MENU =================
 
 def menu():
@@ -162,6 +226,8 @@ def menu():
 
         [InlineKeyboardButton("📊 Análise Completa", callback_data="analise")],
         [InlineKeyboardButton("📋 Histórico", callback_data="historico")],
+        [InlineKeyboardButton("💰 Saldo", callback_data="saldo")],
+        [InlineKeyboardButton("🗑️ Gerenciar", callback_data="gerenciar")],
         [InlineKeyboardButton("🌙 Modo Anti Sono", callback_data="toggle_dark")]
     ])
 
@@ -187,6 +253,46 @@ async def toggle_dark_mode_handler(update: Update, context: ContextTypes.DEFAULT
     status = "🌙 Ativado" if new_mode == 1 else "☀️ Desativado"
     await update.callback_query.answer(f"Modo Anti Sono {status}", show_alert=True)
     await update.callback_query.edit_message_text("🤖 Bot Financeiro Premium", reply_markup=menu())
+
+# ================= SALDO =================
+
+async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.callback_query.from_user.id
+    
+    # Transações
+    cur.execute("SELECT type, amount FROM transactions WHERE user_id=?", (uid,))
+    trans_rows = cur.fetchall()
+    
+    # Rendas
+    cur.execute("SELECT value FROM incomes WHERE user_id=?", (uid,))
+    income_rows = cur.fetchall()
+    
+    # Custos fixos
+    cur.execute("SELECT value FROM fixed_costs WHERE user_id=?", (uid,))
+    fixed_rows = cur.fetchall()
+    
+    total_trans_income = sum(r[1] for r in trans_rows if r[0] == "income")
+    total_trans_expense = sum(r[1] for r in trans_rows if r[0] == "expense")
+    total_income = sum(r[0] for r in income_rows)
+    total_fixed = sum(r[0] for r in fixed_rows)
+    
+    saldo_total = total_income + total_trans_income - total_trans_expense - total_fixed
+    
+    msg = "💰 SALDO GERAL\n\n"
+    msg += f"📈 Renda Total: R$ {total_income:.2f}\n"
+    msg += f"📊 Transações Entrada: R$ {total_trans_income:.2f}\n"
+    msg += f"📉 Transações Saída: R$ {total_trans_expense:.2f}\n"
+    msg += f"📦 Custos Fixos: R$ {total_fixed:.2f}\n"
+    msg += f"\n{'='*30}\n"
+    msg += f"💵 SALDO FINAL: R$ {saldo_total:.2f}\n"
+    
+    if saldo_total >= 0:
+        msg += "✅ Você está no positivo!"
+    else:
+        msg += "⚠️ Você está no negativo!"
+    
+    buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
+    await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(buttons))
 
 # ================= GASTO / GANHO =================
 
@@ -273,6 +379,119 @@ async def meta_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
     await update.callback_query.edit_message_text("Digite a categoria da meta:", reply_markup=InlineKeyboardMarkup(buttons))
 
+# ================= GERENCIAR (DELETE) =================
+
+async def gerenciar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [InlineKeyboardButton("🗑️ Deletar Transação", callback_data="del_trans")],
+        [InlineKeyboardButton("🗑️ Deletar Renda", callback_data="del_income")],
+        [InlineKeyboardButton("🗑️ Deletar Categoria", callback_data="del_cat")],
+        [InlineKeyboardButton("🗑️ Deletar Custo Fixo", callback_data="del_fixed")],
+        [InlineKeyboardButton("🗑️ Deletar Meta", callback_data="del_goal")],
+        [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]
+    ]
+    await update.callback_query.edit_message_text("🗑️ O que deseja deletar?", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def del_trans(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.callback_query.from_user.id
+    cur.execute("SELECT id, amount, category, description, created_at FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 10", (uid,))
+    rows = cur.fetchall()
+    
+    if not rows:
+        await update.callback_query.answer("Nenhuma transação para deletar", show_alert=True)
+        return
+    
+    buttons = [[InlineKeyboardButton(f"R$ {r[1]:.2f} - {r[2]} ({r[3]})", callback_data=f"deltrans_{r[0]}")] for r in rows]
+    buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="gerenciar")])
+    await update.callback_query.edit_message_text("Selecione a transação para deletar:", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def deltrans_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tid = int(update.callback_query.data.replace("deltrans_", ""))
+    if delete_transaction(tid):
+        await update.callback_query.edit_message_text("✅ Transação deletada!", reply_markup=menu())
+    else:
+        await update.callback_query.answer("❌ Erro ao deletar", show_alert=True)
+
+async def del_income(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.callback_query.from_user.id
+    cur.execute("SELECT id, name, value FROM incomes WHERE user_id=? ORDER BY id DESC LIMIT 10", (uid,))
+    rows = cur.fetchall()
+    
+    if not rows:
+        await update.callback_query.answer("Nenhuma renda para deletar", show_alert=True)
+        return
+    
+    buttons = [[InlineKeyboardButton(f"{r[1]} - R$ {r[2]:.2f}", callback_data=f"delinc_{r[0]}")] for r in rows]
+    buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="gerenciar")])
+    await update.callback_query.edit_message_text("Selecione a renda para deletar:", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def delinc_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    iid = int(update.callback_query.data.replace("delinc_", ""))
+    if delete_income(iid):
+        await update.callback_query.edit_message_text("✅ Renda deletada!", reply_markup=menu())
+    else:
+        await update.callback_query.answer("❌ Erro ao deletar", show_alert=True)
+
+async def del_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.callback_query.from_user.id
+    cur.execute("SELECT id, name, type FROM categories WHERE user_id=? ORDER BY id DESC LIMIT 10", (uid,))
+    rows = cur.fetchall()
+    
+    if not rows:
+        await update.callback_query.answer("Nenhuma categoria para deletar", show_alert=True)
+        return
+    
+    buttons = [[InlineKeyboardButton(f"{r[1]} ({r[2]})", callback_data=f"delcat_{r[0]}")] for r in rows]
+    buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="gerenciar")])
+    await update.callback_query.edit_message_text("Selecione a categoria para deletar:", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def delcat_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cid = int(update.callback_query.data.replace("delcat_", ""))
+    if delete_category(cid):
+        await update.callback_query.edit_message_text("✅ Categoria deletada!", reply_markup=menu())
+    else:
+        await update.callback_query.answer("❌ Erro ao deletar", show_alert=True)
+
+async def del_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.callback_query.from_user.id
+    cur.execute("SELECT id, name, value FROM fixed_costs WHERE user_id=? ORDER BY id DESC LIMIT 10", (uid,))
+    rows = cur.fetchall()
+    
+    if not rows:
+        await update.callback_query.answer("Nenhum custo fixo para deletar", show_alert=True)
+        return
+    
+    buttons = [[InlineKeyboardButton(f"{r[1]} - R$ {r[2]:.2f}", callback_data=f"delfixed_{r[0]}")] for r in rows]
+    buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="gerenciar")])
+    await update.callback_query.edit_message_text("Selecione o custo fixo para deletar:", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def delfixed_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    fcid = int(update.callback_query.data.replace("delfixed_", ""))
+    if delete_fixed_cost(fcid):
+        await update.callback_query.edit_message_text("✅ Custo fixo deletado!", reply_markup=menu())
+    else:
+        await update.callback_query.answer("❌ Erro ao deletar", show_alert=True)
+
+async def del_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.callback_query.from_user.id
+    cur.execute("SELECT id, category, limit_value FROM goals WHERE user_id=? ORDER BY id DESC LIMIT 10", (uid,))
+    rows = cur.fetchall()
+    
+    if not rows:
+        await update.callback_query.answer("Nenhuma meta para deletar", show_alert=True)
+        return
+    
+    buttons = [[InlineKeyboardButton(f"{r[1]} - R$ {r[2]:.2f}", callback_data=f"delgoal_{r[0]}")] for r in rows]
+    buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="gerenciar")])
+    await update.callback_query.edit_message_text("Selecione a meta para deletar:", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def delgoal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    gid = int(update.callback_query.data.replace("delgoal_", ""))
+    if delete_goal(gid):
+        await update.callback_query.edit_message_text("✅ Meta deletada!", reply_markup=menu())
+    else:
+        await update.callback_query.answer("❌ Erro ao deletar", show_alert=True)
+
 # ================= UNIVERSAL TEXT HANDLER =================
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -285,8 +504,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = user_state[uid]
     step = state.get("step")
     mode = state.get("mode")
-    
-    print(f"User {uid} - Mode: {mode}, Step: {step}, Text: {text}")
     
     try:
         # ===== GASTO/GANHO - VALOR =====
@@ -342,7 +559,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             val = float(text.replace(",", "."))
             if add_income(uid, state["name"], val):
                 del user_state[uid]
-                await update.message.reply_text("✅ Renda salva com sucesso!", reply_markup=menu())
+                await update.message.reply_text("✅ Renda salva com sucesso! 💰", reply_markup=menu())
             else:
                 await update.message.reply_text("❌ Erro ao salvar. Tente novamente.", reply_markup=menu())
         
@@ -384,12 +601,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Erro: {e}")
         await update.message.reply_text(f"❌ Erro ao processar: {str(e)}")
 
-# ================= ANALISE =================
+# ================= ANALISE DETALHADA =================
 
 async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
 
-    cur.execute("SELECT type, amount, category, description, created_at FROM transactions WHERE user_id=?", (uid,))
+    cur.execute("SELECT id, type, amount, category, description, created_at FROM transactions WHERE user_id=? ORDER BY id DESC", (uid,))
     rows = cur.fetchall()
 
     if not rows:
@@ -397,17 +614,43 @@ async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("📭 Sem transações registradas", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    total_inc = sum(r[1] for r in rows if r[0] == "income")
-    total_exp = sum(r[1] for r in rows if r[0] == "expense")
+    total_inc = sum(r[2] for r in rows if r[1] == "income")
+    total_exp = sum(r[2] for r in rows if r[1] == "expense")
+    
+    # Análise por categoria
+    cat_analysis = {}
+    for r in rows:
+        cat = r[3]
+        if cat not in cat_analysis:
+            cat_analysis[cat] = {"income": 0, "expense": 0}
+        if r[1] == "income":
+            cat_analysis[cat]["income"] += r[2]
+        else:
+            cat_analysis[cat]["expense"] += r[2]
 
-    msg = "📊 ANÁLISE COMPLETA\n\n"
-    msg += f"💰 Ganhos: R$ {total_inc:.2f}\n"
-    msg += f"💸 Gastos: R$ {total_exp:.2f}\n"
-    msg += f"📉 Saldo: R$ {total_inc-total_exp:.2f}\n\n"
-
-    msg += "🔥 Últimos gastos:\n"
-    for r in rows[-10:]:
-        msg += f"🕒 {r[4]} — R$ {r[1]:.2f} — {r[2]} — {r[3]}\n"
+    msg = "📊 ANÁLISE DETALHADA\n"
+    msg += "="*40 + "\n\n"
+    
+    msg += "💰 RESUMO GERAL\n"
+    msg += f"📈 Total Ganho: R$ {total_inc:.2f}\n"
+    msg += f"📉 Total Gasto: R$ {total_exp:.2f}\n"
+    msg += f"💵 Saldo: R$ {total_inc-total_exp:.2f}\n\n"
+    
+    msg += "📂 ANÁLISE POR CATEGORIA\n"
+    msg += "-"*40 + "\n"
+    for cat, data in cat_analysis.items():
+        msg += f"\n{cat}:\n"
+        if data["income"] > 0:
+            msg += f"  ✅ Entrada: R$ {data['income']:.2f}\n"
+        if data["expense"] > 0:
+            msg += f"  ❌ Saída: R$ {data['expense']:.2f}\n"
+    
+    msg += "\n\n📋 ÚLTIMAS TRANSAÇÕES\n"
+    msg += "-"*40 + "\n"
+    for r in rows[:20]:
+        emoji = "✅" if r[1] == "income" else "❌"
+        msg += f"{emoji} {r[5]} | R$ {r[2]:.2f}\n"
+        msg += f"   📂 {r[3]} | {r[4]}\n\n"
 
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(buttons))
@@ -416,7 +659,7 @@ async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.callback_query.from_user.id
-    cur.execute("SELECT amount, category, description, created_at FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 20", (uid,))
+    cur.execute("SELECT id, amount, category, description, created_at FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 30", (uid,))
     rows = cur.fetchall()
 
     if not rows:
@@ -424,9 +667,12 @@ async def historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("📭 Sem registros", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
-    msg = "📋 HISTÓRICO\n\n"
+    msg = "📋 HISTÓRICO (Últimas 30 transações)\n\n"
     for r in rows:
-        msg += f"🕒 {r[3]} — R$ {r[0]:.2f} — {r[1]} — {r[2]}\n"
+        msg += f"🕒 {r[4]}\n"
+        msg += f"💰 R$ {r[1]:.2f} | 📂 {r[2]}\n"
+        msg += f"📝 {r[3]}\n"
+        msg += f"🗑️ ID: {r[0]}\n\n"
 
     buttons = [[InlineKeyboardButton("⬅️ Voltar", callback_data="voltar")]]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(buttons))
@@ -452,12 +698,33 @@ def main():
     app.add_handler(CallbackQueryHandler(meta_start, pattern="^meta$"))
     app.add_handler(CallbackQueryHandler(analise, pattern="^analise$"))
     app.add_handler(CallbackQueryHandler(historico, pattern="^historico$"))
+    app.add_handler(CallbackQueryHandler(saldo, pattern="^saldo$"))
+    app.add_handler(CallbackQueryHandler(gerenciar, pattern="^gerenciar$"))
+    
+    # Delete handlers
+    app.add_handler(CallbackQueryHandler(del_trans, pattern="^del_trans$"))
+    app.add_handler(CallbackQueryHandler(del_income, pattern="^del_income$"))
+    app.add_handler(CallbackQueryHandler(del_cat, pattern="^del_cat$"))
+    app.add_handler(CallbackQueryHandler(del_fixed, pattern="^del_fixed$"))
+    app.add_handler(CallbackQueryHandler(del_goal, pattern="^del_goal$"))
+    
+    app.add_handler(CallbackQueryHandler(deltrans_confirm, pattern="^deltrans_"))
+    app.add_handler(CallbackQueryHandler(delinc_confirm, pattern="^delinc_"))
+    app.add_handler(CallbackQueryHandler(delcat_confirm, pattern="^delcat_"))
+    app.add_handler(CallbackQueryHandler(delfixed_confirm, pattern="^delfixed_"))
+    app.add_handler(CallbackQueryHandler(delgoal_confirm, pattern="^delgoal_"))
 
     # Text handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("🤖 FINANCEIRO PREMIUM ONLINE")
+    print("🤖 FINANCEIRO PREMIUM ONLINE - KEEP ALIVE ATIVADO")
     app.run_polling()
 
 if __name__ == "__main__":
+    # Inicia thread de keep-alive
+    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_alive_thread.start()
+    print("✅ Keep-Alive iniciado!")
+    
+    # Inicia o bot
     main()
