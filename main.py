@@ -12,12 +12,12 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# --- CONFIGURAÇÃO SEGURA ---
-# Pega a senha do Cofre do Render (igual você já configurou e funcionou)
+# --- CONFIGURAÇÃO (NÃO MEXA AQUI) ---
+# O bot pega a senha segura do Cofre do Render.
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TELEGRAM_TOKEN:
-    print("ERRO: Token não encontrado no Render! Configure a Environment Variable.")
+    print("ERRO CRÍTICO: Token não encontrado! Configure a Environment Variable no Render.")
     sys.exit()
 
 # Configuração de Logs
@@ -114,18 +114,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    msg = (f"Olá <b>{user.first_name}</b>!\n\n"
-           f"Eu sou seu Assistente Financeiro 🤖.\n"
-           f"Use os botões abaixo para navegar ou digite os comandos.")
+    msg = (f"Olá <b>{user.first_name}</b>! 👋\n\n"
+           f"Eu sou seu Assistente Financeiro.\n"
+           f"Toque nos botões abaixo ou use os comandos.")
     
     await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
-# --- HANDLER DOS CLIQUES NOS BOTÕES ---
+# --- REAÇÃO AOS CLIQUES NOS BOTÕES ---
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer() # Avisa o Telegram que o clique foi recebido
+    await query.answer() # Confirma o clique para o Telegram não ficar carregando
 
     if query.data == 'btn_extrato':
+        # Chama a função de extrato simulando que veio do botão
         await extrato(update, context, from_button=True)
     
     elif query.data == 'btn_pdf':
@@ -136,7 +137,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text="🛒 <b>COMO ADICIONAR GASTO:</b>\n\n"
                  "Digite o comando, o valor e o nome:\n"
                  "<code>/gasto 50.00 Padaria</code>\n\n"
-                 "Tente digitar agora!",
+                 "👇 Tente digitar agora!",
             parse_mode=ParseMode.HTML
         )
         
@@ -145,7 +146,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text="💰 <b>COMO ADICIONAR GANHO:</b>\n\n"
                  "Digite o comando e o valor:\n"
                  "<code>/ganho 1500.00 Salario</code>\n\n"
-                 "Tente digitar agora!",
+                 "👇 Tente digitar agora!",
             parse_mode=ParseMode.HTML
         )
 
@@ -170,16 +171,15 @@ async def ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Erro! Use assim: <code>/ganho 2000.00</code>", parse_mode=ParseMode.HTML)
 
 async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE, from_button=False):
-    # Lógica para pegar usuário dependendo se veio de botão ou texto
+    # Detecta se veio do botão ou do comando escrito
     if from_button:
         user_id = update.callback_query.from_user.id
         username = update.callback_query.from_user.username
-        # Para responder ao clique, usamos edit_message ou send_message no context
-        func_reply = update.callback_query.message.reply_text
+        reply_method = update.callback_query.message.reply_text
     else:
         user_id = update.effective_user.id
         username = update.effective_user.username
-        func_reply = update.message.reply_text
+        reply_method = update.message.reply_text
 
     uid = bot_logic.initialize_user(user_id, username)
     s = bot_logic.get_summary(uid)
@@ -192,7 +192,7 @@ async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE, from_butto
            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
            f"{cor} <b>SALDO: R$ {saldo:.2f}</b>")
     
-    await func_reply(msg, parse_mode=ParseMode.HTML)
+    await reply_method(msg, parse_mode=ParseMode.HTML)
 
 async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, from_button=False):
     if from_button:
@@ -216,19 +216,21 @@ async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, from_button=Fa
     except Exception as e:
         await msg.edit_text(f"Erro ao gerar PDF: {e}")
 
-# --- INICIALIZAÇÃO ---
+# --- INICIALIZAÇÃO BLINDADA ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot Financeiro com Botões - ONLINE 🚀"
+def home(): return "Bot Financeiro - ONLINE 🚀"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == '__main__':
+    # Thread do site para o Render não reclamar
     threading.Thread(target=run_flask, daemon=True).start()
     
-    # MODO SEGURO (POLLING)
+    # Inicia o Bot
+    print("Iniciando Bot...")
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
     # Registra Comandos e Botões
@@ -237,7 +239,6 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("ganho", ganho))
     application.add_handler(CommandHandler("extrato", extrato))
     application.add_handler(CommandHandler("pdf", pdf))
-    application.add_handler(CallbackQueryHandler(button_click)) # Ouve os cliques
+    application.add_handler(CallbackQueryHandler(button_click)) # IMPORTANTE: Ouve os botões
 
-    print("Bot Iniciado...")
     application.run_polling(drop_pending_updates=True)
