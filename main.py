@@ -1,346 +1,225 @@
-import os
 import sqlite3
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TOKEN:
-    raise RuntimeError("Configure TELEGRAM_TOKEN na Render")
+TOKEN = "SEU_TOKEN_AQUI"
 
-# ================= DATABASE =================
-
+# ================== BANCO ==================
 conn = sqlite3.connect("finance.db", check_same_thread=False)
-cur = conn.cursor()
+cursor = conn.cursor()
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_id INTEGER UNIQUE
-)
-""")
-
-cur.execute("""
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    name TEXT,
-    type TEXT
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT,
+type TEXT
 )
 """)
 
-cur.execute("""
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    type TEXT,
-    amount REAL,
-    category TEXT,
-    description TEXT,
-    created_at TEXT
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+type TEXT,
+category TEXT,
+value REAL,
+description TEXT,
+date TEXT
 )
 """)
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS incomes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    name TEXT,
-    value REAL
-)
-""")
-
-cur.execute("""
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS fixed_costs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    name TEXT,
-    value REAL
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT,
+value REAL
 )
 """)
 
-cur.execute("""
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS goals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    category TEXT,
-    limit_value REAL
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+category TEXT,
+limit_value REAL
 )
 """)
 
 conn.commit()
 
-# ================= MEMORY =================
-
 user_state = {}
 
-# ================= HELPERS =================
-
-def init_user(tid):
-    cur.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (tid,))
-    conn.commit()
-
-def get_categories(uid, ctype):
-    cur.execute("SELECT name FROM categories WHERE user_id=? AND type=?", (uid, ctype))
-    return [x[0] for x in cur.fetchall()]
-
-def add_category(uid, name, ctype):
-    cur.execute("INSERT INTO categories (user_id, name, type) VALUES (?, ?, ?)", (uid, name, ctype))
-    conn.commit()
-
-def add_transaction(uid, t, amount, cat, desc):
-    cur.execute("""
-        INSERT INTO transactions (user_id, type, amount, category, description, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (uid, t, amount, cat, desc, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-
-# ================= MENU =================
-
-def menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📉 Novo Gasto", callback_data="gasto"),
-         InlineKeyboardButton("📈 Novo Ganho", callback_data="ganho")],
-
-        [InlineKeyboardButton("🏷️ Nova Categoria", callback_data="newcat"),
-         InlineKeyboardButton("💼 Registrar Renda", callback_data="addrenda")],
-
-        [InlineKeyboardButton("📦 Custo Fixo", callback_data="fixo"),
-         InlineKeyboardButton("🎯 Definir Meta", callback_data="meta")],
-
-        [InlineKeyboardButton("📊 Análise Completa", callback_data="analise")],
-        [InlineKeyboardButton("📋 Histórico", callback_data="historico")]
-    ])
-
-# ================= START =================
-
+# ================== MENU ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    init_user(update.effective_user.id)
-    await update.message.reply_text("🤖 Bot Financeiro Premium", reply_markup=menu())
+    keyboard = [
+        [InlineKeyboardButton("💸 Novo Gasto", callback_data="new_expense")],
+        [InlineKeyboardButton("💰 Novo Ganho", callback_data="new_income")],
+        [InlineKeyboardButton("📂 Categorias", callback_data="categories")],
+        [InlineKeyboardButton("📊 Análise Completa", callback_data="analysis")],
+        [InlineKeyboardButton("📌 Custos Fixos", callback_data="fixed")],
+        [InlineKeyboardButton("🎯 Metas & Alertas", callback_data="goals")]
+    ]
+    await update.message.reply_text("🏦 BOT FINANCEIRO — MENU", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ================= GASTO / GANHO =================
+# ================== CALLBACK ==================
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-async def start_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"type": "expense"}
-    await update.callback_query.edit_message_text("💰 Digite o valor do gasto:")
+    data = query.data
 
-async def start_ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"type": "income"}
-    await update.callback_query.edit_message_text("💰 Digite o valor do ganho:")
+    if data == "new_expense":
+        user_state[query.from_user.id] = {"type": "expense"}
+        await query.message.reply_text("Digite o valor do gasto:")
 
-async def receive_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    if uid not in user_state:
+    elif data == "new_income":
+        user_state[query.from_user.id] = {"type": "income"}
+        await query.message.reply_text("Digite o valor do ganho:")
+
+    elif data == "categories":
+        await query.message.reply_text("Digite: categoria gasto OU categoria ganho")
+
+    elif data == "analysis":
+        await show_analysis(query)
+
+    elif data == "fixed":
+        await query.message.reply_text("Digite: custo Nome Valor")
+
+    elif data == "goals":
+        await query.message.reply_text("Digite: meta Categoria ValorLimite")
+
+# ================== TEXTO ==================
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    text = update.message.text
+
+    # Criar categoria
+    if text.lower().startswith("categoria"):
+        _, tipo = text.split()
+        await update.message.reply_text("Digite o nome da categoria:")
+        user_state[user_id] = {"action": "add_category", "type": tipo}
         return
 
-    try:
-        val = float(update.message.text.replace(",", "."))
-        user_state[uid]["value"] = val
-    except:
-        await update.message.reply_text("❌ Valor inválido")
+    # Criar custo fixo
+    if text.lower().startswith("custo"):
+        _, name, value = text.split(maxsplit=2)
+        cursor.execute("INSERT INTO fixed_costs VALUES(NULL, ?, ?)", (name, float(value)))
+        conn.commit()
+        await update.message.reply_text("✅ Custo fixo adicionado!")
         return
 
-    ctype = "expense" if user_state[uid]["type"] == "expense" else "income"
-    cats = get_categories(uid, ctype)
-
-    if not cats:
-        await update.message.reply_text("❗ Cadastre uma categoria primeiro")
+    # Criar meta
+    if text.lower().startswith("meta"):
+        _, cat, limit_value = text.split()
+        cursor.execute("INSERT INTO goals VALUES(NULL, ?, ?)", (cat, float(limit_value)))
+        conn.commit()
+        await update.message.reply_text("🎯 Meta criada!")
         return
 
-    buttons = [[InlineKeyboardButton(c, callback_data=f"cat_{c}")] for c in cats]
-    await update.message.reply_text("📂 Escolha categoria:", reply_markup=InlineKeyboardMarkup(buttons))
+    # Categoria salva
+    if user_id in user_state and user_state[user_id].get("action") == "add_category":
+        tipo = user_state[user_id]["type"]
+        cursor.execute("INSERT INTO categories VALUES(NULL, ?, ?)", (text, tipo))
+        conn.commit()
+        await update.message.reply_text(f"✅ Categoria {text} criada ({tipo})")
+        user_state.pop(user_id)
+        return
 
-async def choose_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.callback_query.from_user.id
-    cat = update.callback_query.data.replace("cat_", "")
-    user_state[uid]["category"] = cat
-    await update.callback_query.edit_message_text("📝 Descrição:")
+    # Novo gasto ou ganho
+    if user_id in user_state and "type" in user_state[user_id] and "value" not in user_state[user_id]:
+        user_state[user_id]["value"] = float(text)
+        cats = cursor.execute("SELECT name FROM categories WHERE type=?", (user_state[user_id]["type"],)).fetchall()
+        if not cats:
+            await update.message.reply_text("❌ Crie categorias primeiro.")
+            return
+        buttons = [[InlineKeyboardButton(c[0], callback_data=f"cat_{c[0]}")] for c in cats]
+        await update.message.reply_text("Escolha a categoria:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
 
-async def receive_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    if uid not in user_state:
+# ================== SELECIONAR CATEGORIA ==================
+async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    category = query.data.replace("cat_", "")
+
+    data = user_state[user_id]
+    value = data["value"]
+    trans_type = data["type"]
+
+    user_state[user_id]["category"] = category
+    await query.message.reply_text("Digite a descrição:")
+    user_state[user_id]["step"] = "desc"
+
+# ================== SALVAR TRANSAÇÃO ==================
+async def save_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if user_id not in user_state or user_state[user_id].get("step") != "desc":
         return
 
     desc = update.message.text
-    data = user_state[uid]
+    data = user_state[user_id]
 
-    add_transaction(uid, data["type"], data["value"], data["category"], desc)
-    del user_state[uid]
+    cursor.execute("""
+    INSERT INTO transactions VALUES(NULL, ?, ?, ?, ?, ?)
+    """, (
+        data["type"],
+        data["category"],
+        data["value"],
+        desc,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ))
 
-    await update.message.reply_text("✅ Registro salvo", reply_markup=menu())
-
-# ================= ADD CATEGORY =================
-
-async def new_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"mode": "newcat"}
-    await update.callback_query.edit_message_text("Digite o nome da categoria:")
-
-async def save_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    if uid not in user_state or user_state[uid].get("mode") != "newcat":
-        return
-
-    name = update.message.text
-    user_state[uid]["name"] = name
-
-    buttons = [
-        [InlineKeyboardButton("📉 Gasto", callback_data="type_expense")],
-        [InlineKeyboardButton("📈 Ganho", callback_data="type_income")]
-    ]
-    await update.message.reply_text("Tipo da categoria:", reply_markup=InlineKeyboardMarkup(buttons))
-
-async def save_cat_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.callback_query.from_user.id
-    ctype = "expense" if "expense" in update.callback_query.data else "income"
-
-    name = user_state[uid]["name"]
-    add_category(uid, name, ctype)
-    del user_state[uid]
-
-    await update.callback_query.edit_message_text("✅ Categoria criada", reply_markup=menu())
-
-# ================= RENDA =================
-
-async def renda_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"mode": "renda"}
-    await update.callback_query.edit_message_text("Nome da renda:")
-
-async def renda_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    user_state[uid]["name"] = update.message.text
-    await update.message.reply_text("Valor da renda:")
-
-async def renda_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    val = float(update.message.text.replace(",", "."))
-
-    cur.execute("INSERT INTO incomes (user_id, name, value) VALUES (?, ?, ?)",
-                (uid, user_state[uid]["name"], val))
     conn.commit()
+    await update.message.reply_text("✅ Transação registrada!")
 
-    del user_state[uid]
-    await update.message.reply_text("✅ Renda salva", reply_markup=menu())
+    await check_goals(update, data["category"])
 
-# ================= CUSTO FIXO =================
+    user_state.pop(user_id)
 
-async def fixed_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"mode": "fixo"}
-    await update.callback_query.edit_message_text("Nome do custo fixo:")
+# ================== METAS ==================
+async def check_goals(update, category):
+    goal = cursor.execute("SELECT limit_value FROM goals WHERE category=?", (category,)).fetchone()
+    if goal:
+        total = cursor.execute("SELECT SUM(value) FROM transactions WHERE category=? AND type='expense'", (category,)).fetchone()[0] or 0
+        limit_value = goal[0]
 
-async def fixed_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    user_state[uid]["name"] = update.message.text
-    await update.message.reply_text("Valor do custo:")
+        if total >= limit_value * 0.8 and total < limit_value:
+            await update.message.reply_text(f"⚠️ Você gastou 80% do limite em {category}. Vai comer ovo 🍳")
+        elif total >= limit_value:
+            await update.message.reply_text(f"🚨 LIMITE ESTOURADO EM {category}!")
 
-async def fixed_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    val = float(update.message.text.replace(",", "."))
+# ================== ANÁLISE ==================
+async def show_analysis(query):
+    expenses = cursor.execute("SELECT category, SUM(value) FROM transactions WHERE type='expense' GROUP BY category").fetchall()
+    incomes = cursor.execute("SELECT SUM(value) FROM transactions WHERE type='income'").fetchone()[0] or 0
 
-    cur.execute("INSERT INTO fixed_costs (user_id, name, value) VALUES (?, ?, ?)",
-                (uid, user_state[uid]["name"], val))
-    conn.commit()
+    text = "📊 ANÁLISE COMPLETA\n\n💸 Gastos por categoria:\n"
+    total_exp = 0
 
-    del user_state[uid]
-    await update.message.reply_text("✅ Custo fixo cadastrado", reply_markup=menu())
+    for cat, val in expenses:
+        total_exp += val
+        text += f"• {cat}: R$ {val:.2f}\n"
 
-# ================= META =================
+    text += f"\n💰 Total Ganhos: R$ {incomes:.2f}"
+    text += f"\n💸 Total Gastos: R$ {total_exp:.2f}"
+    text += f"\n📈 Saldo: R$ {incomes - total_exp:.2f}"
 
-async def meta_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_state[update.callback_query.from_user.id] = {"mode": "meta"}
-    await update.callback_query.edit_message_text("Categoria da meta:")
+    await query.message.reply_text(text)
 
-async def meta_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    user_state[uid]["category"] = update.message.text
-    await update.message.reply_text("Valor limite da meta:")
-
-async def meta_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    val = float(update.message.text.replace(",", "."))
-
-    cur.execute("INSERT INTO goals (user_id, category, limit_value) VALUES (?, ?, ?)",
-                (uid, user_state[uid]["category"], val))
-    conn.commit()
-
-    del user_state[uid]
-    await update.message.reply_text("🎯 Meta salva", reply_markup=menu())
-
-# ================= ANALISE =================
-
-async def analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.callback_query.from_user.id
-
-    cur.execute("SELECT type, amount, category, description, created_at FROM transactions WHERE user_id=?", (uid,))
-    rows = cur.fetchall()
-
-    total_inc = sum(r[1] for r in rows if r[0] == "income")
-    total_exp = sum(r[1] for r in rows if r[0] == "expense")
-
-    msg = "📊 ANÁLISE COMPLETA\n\n"
-    msg += f"💰 Ganhos: R$ {total_inc:.2f}\n"
-    msg += f"💸 Gastos: R$ {total_exp:.2f}\n"
-    msg += f"📉 Saldo: R$ {total_inc-total_exp:.2f}\n\n"
-
-    msg += "🔥 Últimos gastos:\n"
-    for r in rows[-10:]:
-        msg += f"🕒 {r[4]} — R$ {r[1]:.2f} — {r[2]} — {r[3]}\n"
-
-    await update.callback_query.edit_message_text(msg, reply_markup=menu())
-
-# ================= HISTÓRICO =================
-
-async def historico(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.callback_query.from_user.id
-    cur.execute("SELECT amount, category, description, created_at FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 20", (uid,))
-    rows = cur.fetchall()
-
-    if not rows:
-        await update.callback_query.edit_message_text("📭 Sem registros", reply_markup=menu())
-        return
-
-    msg = "📋 HISTÓRICO\n\n"
-    for r in rows:
-        msg += f"🕒 {r[3]} — R$ {r[0]:.2f} — {r[1]} — {r[2]}\n"
-
-    await update.callback_query.edit_message_text(msg, reply_markup=menu())
-
-# ================= MAIN =================
-
-def main():
+# ================== MAIN ==================
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(buttons))
+    app.add_handler(CallbackQueryHandler(select_category, pattern="^cat_"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_description))
 
-    app.add_handler(CallbackQueryHandler(start_gasto, pattern="^gasto$"))
-    app.add_handler(CallbackQueryHandler(start_ganho, pattern="^ganho$"))
-
-    app.add_handler(CallbackQueryHandler(new_cat, pattern="^newcat$"))
-    app.add_handler(CallbackQueryHandler(save_cat_type, pattern="^type_"))
-
-    app.add_handler(CallbackQueryHandler(renda_start, pattern="^addrenda$"))
-    app.add_handler(CallbackQueryHandler(fixed_start, pattern="^fixo$"))
-    app.add_handler(CallbackQueryHandler(meta_start, pattern="^meta$"))
-
-    app.add_handler(CallbackQueryHandler(analise, pattern="^analise$"))
-    app.add_handler(CallbackQueryHandler(historico, pattern="^historico$"))
-
-    app.add_handler(CallbackQueryHandler(choose_category, pattern="^cat_"))
-
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_value))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_desc))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_cat))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, renda_name))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, renda_value))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fixed_name))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fixed_value))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, meta_category))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, meta_value))
-
-    print("🤖 FINANCEIRO PREMIUM ONLINE")
-    app.run_polling()
+    print("🤖 BOT FINANCEIRO ONLINE")
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
