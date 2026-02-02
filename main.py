@@ -28,6 +28,7 @@ conn.commit()
 CATEGORIES = ["Alimentação", "Transporte", "Lazer", "Aluguel", "Salário", "Outros"]
 user_state = {}
 
+# START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("➕ Gasto", callback_data="expense")],
@@ -40,6 +41,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+# MENU
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -48,7 +50,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in ["expense", "income"]:
         user_state[user_id] = {"type": query.data}
         buttons = [[InlineKeyboardButton(c, callback_data=f"cat_{c}")] for c in CATEGORIES]
-        await query.edit_message_text("📂 Categoria:", reply_markup=InlineKeyboardMarkup(buttons))
+        await query.edit_message_text("📂 Escolha a categoria:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif query.data == "report":
         cursor.execute("SELECT type, SUM(amount) FROM transactions WHERE user_id=? GROUP BY type", (user_id,))
@@ -61,11 +63,12 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 *Relatório*\n\n"
             f"💰 Ganhos: R$ {income:.2f}\n"
             f"💸 Gastos: R$ {expense:.2f}\n"
-            f"📉 Saldo: R$ {income-expense:.2f}"
+            f"📉 Saldo: R$ {income - expense:.2f}"
         )
 
         await query.edit_message_text(msg, parse_mode="Markdown")
 
+# CATEGORIA
 async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -76,6 +79,7 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text("💵 Digite o valor:")
 
+# SALVAR VALOR
 async def save_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
@@ -100,7 +104,8 @@ async def save_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("✅ Salvo com sucesso!")
 
-async def main():
+# MAIN
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -108,9 +113,8 @@ async def main():
     app.add_handler(CallbackQueryHandler(select_category, pattern="cat_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_value))
 
-    print("🤖 Bot online...")
-    await app.run_polling()
+    print("🤖 Bot Financeiro rodando...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
