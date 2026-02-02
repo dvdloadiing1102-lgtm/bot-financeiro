@@ -2,34 +2,37 @@ import os
 import sqlite3
 import threading
 import logging
-import asyncio
+import sys
 from flask import Flask
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# --- SEU TOKEN (O VÁLIDO QUE TERMINA EM SSFYc) ---
-TELEGRAM_TOKEN = "8314300130:AAGFjGNp6L6n_8TmvvKIvOsP0bLmX_SSFYc"
+# --- CONFIGURAÇÃO SEGURA ---
+# Pega a senha do Cofre do Render (igual você já configurou e funcionou)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# Configuração de Logs (Para pegarmos qualquer erro)
+if not TELEGRAM_TOKEN:
+    print("ERRO: Token não encontrado no Render! Configure a Environment Variable.")
+    sys.exit()
+
+# Configuração de Logs
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
 
-# --- BANCO DE DADOS (Com proteção de Thread) ---
+# --- BANCO DE DADOS ---
 class FinanceDatabase:
     def __init__(self, db_path="finance_bot.db"):
         self.db_path = db_path
         self.init_db()
 
     def get_connection(self):
-        # Permite conexões de threads diferentes (Flask vs Telegram)
         return sqlite3.connect(self.db_path, check_same_thread=False)
 
     def init_db(self):
@@ -45,10 +48,10 @@ class FinanceDatabase:
             c.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
             res = c.fetchone()
             if res: return res[0]
-            c.execute("INSERT INTO users (telegram_id, username) VALUES (?, ?)", (telegram_id, username or "SemNome"))
+            c.execute("INSERT INTO users (telegram_id, username) VALUES (?, ?)", (telegram_id, username or "Usuario"))
             return c.lastrowid
 
-# --- LÓGICA DO BOT ---
+# --- LÓGICA FINANCEIRA ---
 class FinanceBot:
     def __init__(self, db_path="finance_bot.db"):
         self.db = FinanceDatabase(db_path)
@@ -85,7 +88,6 @@ class FinanceBot:
         styles = getSampleStyleSheet()
         elements.append(Paragraph("Relatório Financeiro", styles['Heading1']))
         elements.append(Spacer(1, 20))
-        
         data = [["Resumo", "Valor"], ["Ganhos", f"R$ {summary['income']:.2f}"], ["Gastos", f"R$ {summary['expense']:.2f}"], ["Saldo", f"R$ {summary['income'] - summary['expense']:.2f}"]]
         t = Table(data)
         t.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.black), ('BACKGROUND', (0,0), (-1,0), colors.lightgrey)]))
@@ -94,19 +96,60 @@ class FinanceBot:
 
 bot_logic = FinanceBot()
 
-# --- COMANDOS DO TELEGRAM (USANDO HTML) ---
+# --- INTERFACE COM BOTÕES ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     bot_logic.initialize_user(user.id, user.username)
-    # HTML é mais seguro que Markdown para nomes com caracteres estranhos
-    msg = (f"Olá <b>{user.first_name}</b>!\n\n"
-           f"💰 <b>COMANDOS:</b>\n"
-           f"/gasto 50.00 Mercado\n"
-           f"/ganho 2000.00 Salario\n"
-           f"/extrato\n"
-           f"/pdf")
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    
+    # Criação dos Botões Flutuantes
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Ver Extrato", callback_data='btn_extrato'),
+            InlineKeyboardButton("📄 Baixar PDF", callback_data='btn_pdf')
+        ],
+        [
+            InlineKeyboardButton("➕ Ajuda Gasto", callback_data='help_gasto'),
+            InlineKeyboardButton("💰 Ajuda Ganho", callback_data='help_ganho')
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
+    msg = (f"Olá <b>{user.first_name}</b>!\n\n"
+           f"Eu sou seu Assistente Financeiro 🤖.\n"
+           f"Use os botões abaixo para navegar ou digite os comandos.")
+    
+    await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+# --- HANDLER DOS CLIQUES NOS BOTÕES ---
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer() # Avisa o Telegram que o clique foi recebido
+
+    if query.data == 'btn_extrato':
+        await extrato(update, context, from_button=True)
+    
+    elif query.data == 'btn_pdf':
+        await pdf(update, context, from_button=True)
+    
+    elif query.data == 'help_gasto':
+        await query.edit_message_text(
+            text="🛒 <b>COMO ADICIONAR GASTO:</b>\n\n"
+                 "Digite o comando, o valor e o nome:\n"
+                 "<code>/gasto 50.00 Padaria</code>\n\n"
+                 "Tente digitar agora!",
+            parse_mode=ParseMode.HTML
+        )
+        
+    elif query.data == 'help_ganho':
+        await query.edit_message_text(
+            text="💰 <b>COMO ADICIONAR GANHO:</b>\n\n"
+                 "Digite o comando e o valor:\n"
+                 "<code>/ganho 1500.00 Salario</code>\n\n"
+                 "Tente digitar agora!",
+            parse_mode=ParseMode.HTML
+        )
+
+# --- COMANDOS ---
 async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         val = float(context.args[0].replace(',', '.'))
@@ -115,7 +158,7 @@ async def gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_logic.add_transaction(uid, "expense", val, cat, "Gasto")
         await update.message.reply_text(f"✅ Gasto de <b>R$ {val:.2f}</b> em <i>{cat}</i> salvo!", parse_mode=ParseMode.HTML)
     except:
-        await update.message.reply_text("❌ Use assim: <code>/gasto 50.00 Mercado</code>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("❌ Erro! Use assim: <code>/gasto 50.00 Mercado</code>", parse_mode=ParseMode.HTML)
 
 async def ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -124,58 +167,77 @@ async def ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_logic.add_transaction(uid, "income", val, "Salario", "Ganho")
         await update.message.reply_text(f"✅ Ganho de <b>R$ {val:.2f}</b> salvo!", parse_mode=ParseMode.HTML)
     except:
-        await update.message.reply_text("❌ Use assim: <code>/ganho 2000.00</code>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("❌ Erro! Use assim: <code>/ganho 2000.00</code>", parse_mode=ParseMode.HTML)
 
-async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
+async def extrato(update: Update, context: ContextTypes.DEFAULT_TYPE, from_button=False):
+    # Lógica para pegar usuário dependendo se veio de botão ou texto
+    if from_button:
+        user_id = update.callback_query.from_user.id
+        username = update.callback_query.from_user.username
+        # Para responder ao clique, usamos edit_message ou send_message no context
+        func_reply = update.callback_query.message.reply_text
+    else:
+        user_id = update.effective_user.id
+        username = update.effective_user.username
+        func_reply = update.message.reply_text
+
+    uid = bot_logic.initialize_user(user_id, username)
     s = bot_logic.get_summary(uid)
     saldo = s['income'] - s['expense']
-    cor_saldo = "🟢" if saldo >= 0 else "🔴"
-    msg = (f"📊 <b>RESUMO</b>\n\n"
-           f"💰 Entrou: R$ {s['income']:.2f}\n"
-           f"💸 Saiu: R$ {s['expense']:.2f}\n"
-           f"{cor_saldo} <b>Saldo: R$ {saldo:.2f}</b>")
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    cor = "🟢" if saldo >= 0 else "🔴"
+    
+    msg = (f"📊 <b>RESUMO FINANCEIRO</b>\n\n"
+           f"💰 Entradas: R$ {s['income']:.2f}\n"
+           f"💸 Saídas:   R$ {s['expense']:.2f}\n"
+           f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+           f"{cor} <b>SALDO: R$ {saldo:.2f}</b>")
+    
+    await func_reply(msg, parse_mode=ParseMode.HTML)
 
-async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ Gerando PDF...")
-    uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
+async def pdf(update: Update, context: ContextTypes.DEFAULT_TYPE, from_button=False):
+    if from_button:
+        user_id = update.callback_query.from_user.id
+        username = update.callback_query.from_user.username
+        message_obj = update.callback_query.message
+    else:
+        user_id = update.effective_user.id
+        username = update.effective_user.username
+        message_obj = update.message
+
+    msg = await message_obj.reply_text("⏳ Gerando PDF...")
+    uid = bot_logic.initialize_user(user_id, username)
     fname = f"relatorio_{uid}.pdf"
+    
     try:
         bot_logic.export_pdf(uid, fname)
-        await update.message.reply_document(open(fname, 'rb'))
+        await message_obj.reply_document(open(fname, 'rb'))
         os.remove(fname)
         await msg.delete()
     except Exception as e:
-        await msg.edit_text(f"Erro: {e}")
+        await msg.edit_text(f"Erro ao gerar PDF: {e}")
 
-# --- SERVIDOR WEB (FLASK) ---
+# --- INICIALIZAÇÃO ---
 app = Flask(__name__)
-
 @app.route('/')
-def home():
-    return "🤖 Bot Financeiro Rodando em HTML Mode! Status: ONLINE."
+def home(): return "Bot Financeiro com Botões - ONLINE 🚀"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# --- INICIALIZAÇÃO DO BOT ---
 if __name__ == '__main__':
-    # 1. Inicia o Flask em uma thread separada para o Render não reclamar
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-
-    # 2. Configura e Roda o Bot (POLLING)
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # MODO SEGURO (POLLING)
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
+    # Registra Comandos e Botões
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("gasto", gasto))
     application.add_handler(CommandHandler("ganho", ganho))
     application.add_handler(CommandHandler("extrato", extrato))
     application.add_handler(CommandHandler("pdf", pdf))
+    application.add_handler(CallbackQueryHandler(button_click)) # Ouve os cliques
 
-    # Comando para limpar qualquer webhook preso e forçar o polling
-    print("Iniciando Polling...")
+    print("Bot Iniciado...")
     application.run_polling(drop_pending_updates=True)
