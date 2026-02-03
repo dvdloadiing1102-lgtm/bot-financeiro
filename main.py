@@ -8,7 +8,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
 
 TOKEN = os.getenv("8314300130:AAGLrTqIZDpPbWug-Rtj6sa0LpPCK15e6qI")
-RENDER_URL = os.getenv("https://bot-financeiro-hu1p.onrender.com)
+RENDER_URL = "https://bot-financeiro-hu1p.onrender.com"
 DB_FILE = "finance_master.json"
 
 if not TOKEN:
