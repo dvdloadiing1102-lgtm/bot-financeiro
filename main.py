@@ -22,7 +22,7 @@ except ImportError:
 # ================= CONFIGURAÇÃO =================
 
 # 👇👇👇 SEU TOKEN AQUI 👇👇👇
-TOKEN = "SEU_TOKEN_AQUI" 
+TOKEN = "8314300130:AAGLrTqIZDpPbWug-Rtj6sa0LpPCK15e6qI" 
 
 DB_FILE = "finance_final.json"
 
