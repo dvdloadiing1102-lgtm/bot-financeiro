@@ -12,11 +12,11 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 
 # ================= CONFIG =================
 
-TOKEN = "8314300130:AAGLrTqIZDpPbWug-Rtj6sa0LpPCK15e6qI"  # <<< COLE SEU TOKEN AQUI
+TOKEN = "8314300130:AAGLrTqIZDpPbWug-Rtj6sa0LpPCK15e6qI"  # SEU TOKEN
 RENDER_URL = os.getenv("RENDER_URL")
 DB_FILE = "finance_master.json"
 
-# ================= ANTI-SLEEP PORTA INVISÍVEL =================
+# ================= ANTI-SLEEP SERVER =================
 
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -94,9 +94,8 @@ def main_menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(
-        "🤖 **FINANCEIRO PRO — MODO ABSURDO TOTAL**\n\nEscolha uma opção:",
-        reply_markup=main_menu(),
-        parse_mode="Markdown"
+        "🤖 FINANCEIRO PRO — MODO ABSURDO TOTAL\n\nEscolha uma opção:",
+        reply_markup=main_menu()
     )
 
 # ================= REGISTRO =================
@@ -115,7 +114,6 @@ async def receive_text(update, context):
     step = context.user_data.get("step")
     text = update.message.text
 
-    # ===== VALOR =====
     if step == "value":
         try:
             val = float(text.replace(",", "."))
@@ -133,14 +131,12 @@ async def receive_text(update, context):
             await update.message.reply_text("❌ Valor inválido")
         return
 
-    # ===== DESCRIÇÃO =====
     if step == "desc":
         save_transaction(context, text)
-        await update.message.reply_text("✅ Registrado com sucesso!", reply_markup=main_menu())
+        await update.message.reply_text("✅ Registrado!", reply_markup=main_menu())
         context.user_data.clear()
         return
 
-    # ===== NOVA CATEGORIA =====
     if step == "new_cat_name":
         tipo = context.user_data.get("type", "gasto")
         db["categories"][tipo].append(text)
@@ -150,12 +146,10 @@ async def receive_text(update, context):
         await update.message.reply_text("Categoria criada! Agora descrição:")
         return
 
-    # ===== FIXOS =====
     if step == "fixed_add":
         try:
-            parts = text.rsplit(" ", 1)
-            name = parts[0]
-            val = float(parts[1])
+            name, val = text.rsplit(" ", 1)
+            val = float(val)
             db["fixed"].append({"name": name, "value": val})
             save_db(db)
             await update.message.reply_text("✅ Custo fixo salvo", reply_markup=main_menu())
@@ -164,12 +158,10 @@ async def receive_text(update, context):
         context.user_data.clear()
         return
 
-    # ===== META =====
     if step == "goal_add":
         try:
-            parts = text.rsplit(" ", 1)
-            cat = parts[0]
-            val = float(parts[1])
+            cat, val = text.rsplit(" ", 1)
+            val = float(val)
             db["goals"].append({"category": cat, "limit": val})
             save_db(db)
             await update.message.reply_text("🎯 Meta criada!", reply_markup=main_menu())
@@ -220,15 +212,15 @@ async def report(update, context):
     ganho = sum(t["value"] for t in db["transactions"] if t["type"] == "ganho")
     saldo = ganho - gasto
 
-    msg = f"📊 **RELATÓRIO FINANCEIRO**\n\n"
+    msg = f"📊 RELATÓRIO FINANCEIRO\n\n"
     msg += f"💰 Ganhos: R$ {ganho:.2f}\n"
     msg += f"💸 Gastos: R$ {gasto:.2f}\n"
     msg += f"📉 Saldo: R$ {saldo:.2f}\n\n"
 
     if saldo < 0:
-        msg += "⚠️ Tá gastando igual político em campanha 😅\n"
+        msg += "⚠️ Tá gastando igual político em campanha 😅"
 
-    await query.edit_message_text(msg, reply_markup=main_menu(), parse_mode="Markdown")
+    await query.edit_message_text(msg, reply_markup=main_menu())
 
 # ================= HISTÓRICO =================
 
@@ -240,12 +232,12 @@ async def history(update, context):
         await query.edit_message_text("Sem registros", reply_markup=main_menu())
         return
 
-    msg = "📋 **HISTÓRICO RECENTE**\n\n"
+    msg = "📋 HISTÓRICO RECENTE\n\n"
     for t in reversed(db["transactions"][-25:]):
         emoji = "🔴" if t["type"] == "gasto" else "🟢"
         msg += f"{emoji} {t['category']} — R$ {t['value']:.2f}\n📝 {t['description']} ({t['date']})\n\n"
 
-    await query.edit_message_text(msg, reply_markup=main_menu(), parse_mode="Markdown")
+    await query.edit_message_text(msg, reply_markup=main_menu())
 
 # ================= FIXOS =================
 
@@ -253,7 +245,7 @@ async def menu_fixed(update, context):
     query = update.callback_query
     await query.answer()
 
-    msg = "📦 **CUSTOS FIXOS**\n\n"
+    msg = "📦 CUSTOS FIXOS\n\n"
     if not db["fixed"]:
         msg += "Nenhum cadastrado\n"
     else:
@@ -265,7 +257,7 @@ async def menu_fixed(update, context):
         [InlineKeyboardButton("⬅️ Voltar", callback_data="start")]
     ]
 
-    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
 async def add_fixed(update, context):
     query = update.callback_query
@@ -279,7 +271,7 @@ async def menu_goals(update, context):
     query = update.callback_query
     await query.answer()
 
-    msg = "🎯 **METAS**\n\n"
+    msg = "🎯 METAS\n\n"
     for g in db["goals"]:
         gasto = sum(t["value"] for t in db["transactions"] if t["category"] == g["category"] and t["type"] == "gasto")
         pct = int((gasto / g["limit"]) * 100) if g["limit"] > 0 else 0
@@ -293,7 +285,7 @@ async def menu_goals(update, context):
         [InlineKeyboardButton("⬅️ Voltar", callback_data="start")]
     ]
 
-    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
 async def add_goal(update, context):
     query = update.callback_query
@@ -354,7 +346,10 @@ async def main():
     asyncio.create_task(keep_alive())
 
     print("🤖 BOT FINANCEIRO ABSURDO ONLINE")
-    await app.run_polling()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
