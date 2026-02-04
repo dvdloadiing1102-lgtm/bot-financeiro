@@ -88,6 +88,7 @@ async def full_report(update, context):
         msg += f"🔸 {c}: R$ {v:.2f}\n"
     
     await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]), parse_mode="Markdown")
+    return ConversationHandler.END
 
 # ================= CATEGORIA (CORRIGIDO) =================
 async def menu_cat(update, context):
@@ -113,6 +114,7 @@ async def menu_delete(update, context):
     kb = [[InlineKeyboardButton(f"❌ {t['value']} - {t['category']}", callback_data=f"kill_{t['id']}")] for t in reversed(db["transactions"][-5:])]
     kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="cancel")])
     await query.edit_message_text("🗑️ **Selecione para apagar:**", reply_markup=InlineKeyboardMarkup(kb))
+    return ConversationHandler.END
 
 async def delete_item(update, context):
     query = update.callback_query; await query.answer()
@@ -176,10 +178,120 @@ async def ai_coach(update, context):
         resp = model_ai.generate_content(f"{prompt}. Saldo:{saldo}")
         await query.edit_message_text(f"🧠 **IA:**\n\n{resp.text}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
     except: await query.edit_message_text("❌ Erro na IA.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
+    return ConversationHandler.END
 
 async def toggle_mode(update, context):
     db["config"]["zoeiro_mode"] = not db["config"]["zoeiro_mode"]
     save_db(db); return await start(update, context)
+
+# ================= MENU FIXOS (NOVO) =================
+async def menu_fixed(update, context):
+    query = update.callback_query; await query.answer()
+    fixos_ganho = [f for f in db["fixed"] if f['type'] == 'ganho']
+    fixos_gasto = [f for f in db["fixed"] if f['type'] == 'gasto']
+    
+    msg = "📌 **DESPESAS FIXAS**\n\n"
+    msg += "**Ganhos Fixos:**\n"
+    for f in fixos_ganho:
+        msg += f"✅ {f['description']}: R$ {f['value']:.2f}\n"
+    msg += "\n**Gastos Fixos:**\n"
+    for f in fixos_gasto:
+        msg += f"❌ {f['description']}: R$ {f['value']:.2f}\n"
+    
+    kb = [
+        [InlineKeyboardButton("➕ Adicionar Ganho Fixo", callback_data="add_fixed_ganho")],
+        [InlineKeyboardButton("➕ Adicionar Gasto Fixo", callback_data="add_fixed_gasto")],
+        [InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]
+    ]
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    return ConversationHandler.END
+
+# ================= GRÁFICO (NOVO) =================
+async def chart_pie(update, context):
+    query = update.callback_query; await query.answer()
+    await query.edit_message_text("📊 **Gerando gráfico...**")
+    
+    mes = datetime.now().strftime("%m/%Y")
+    trans = [t for t in db["transactions"] if mes in t['date'] and t['type'] == 'gasto']
+    cats = {}
+    for t in trans:
+        cats[t['category']] = cats.get(t['category'], 0) + t['value']
+    
+    if not cats:
+        await query.edit_message_text("❌ Sem dados para gerar gráfico.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
+        return ConversationHandler.END
+    
+    plt.figure(figsize=(8, 6))
+    plt.pie(cats.values(), labels=cats.keys(), autopct='%1.1f%%', startangle=90)
+    plt.title(f"Gastos por Categoria - {mes}")
+    
+    img_path = "chart_temp.png"
+    plt.savefig(img_path, bbox_inches='tight')
+    plt.close()
+    
+    with open(img_path, 'rb') as img:
+        await query.message.reply_photo(photo=img, caption="📊 Gráfico de Gastos")
+    
+    os.remove(img_path)
+    await query.edit_message_text("✅ Gráfico enviado!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
+    return ConversationHandler.END
+
+# ================= EXPORTAR PDF (NOVO) =================
+async def export_pdf(update, context):
+    query = update.callback_query; await query.answer()
+    await query.edit_message_text("📄 **Gerando PDF...**")
+    
+    mes = datetime.now().strftime("%m/%Y")
+    saldo, t_in, t_out = calculate_balance()
+    
+    pdf_path = "relatorio_financeiro.pdf"
+    c = canvas.Canvas(pdf_path, pagesize=letter)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, 750, f"Relatório Financeiro - {mes}")
+    
+    c.setFont("Helvetica", 12)
+    c.drawString(50, 720, f"Saldo: R$ {saldo:.2f}")
+    c.drawString(50, 700, f"Entradas: R$ {t_in:.2f}")
+    c.drawString(50, 680, f"Saídas: R$ {t_out:.2f}")
+    
+    c.save()
+    
+    with open(pdf_path, 'rb') as pdf:
+        await query.message.reply_document(document=pdf, filename=pdf_path)
+    
+    os.remove(pdf_path)
+    await query.edit_message_text("✅ PDF enviado!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
+    return ConversationHandler.END
+
+# ================= EXPORTAR CSV (NOVO) =================
+async def export_csv(update, context):
+    query = update.callback_query; await query.answer()
+    await query.edit_message_text("📂 **Gerando CSV...**")
+    
+    csv_path = "transacoes_financeiras.csv"
+    
+    with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['ID', 'Tipo', 'Valor', 'Categoria', 'Carteira', 'Descrição', 'Data']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        for t in db["transactions"]:
+            writer.writerow({
+                'ID': t['id'],
+                'Tipo': t['type'],
+                'Valor': f"R$ {t['value']:.2f}",
+                'Categoria': t['category'],
+                'Carteira': t['wallet'],
+                'Descrição': t['description'],
+                'Data': t['date']
+            })
+    
+    with open(csv_path, 'rb') as csv_file:
+        await query.message.reply_document(document=csv_file, filename=csv_path)
+    
+    os.remove(csv_path)
+    await query.edit_message_text("✅ CSV enviado!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
+    return ConversationHandler.END
 
 # ================= EXECUÇÃO =================
 if __name__ == "__main__":
@@ -207,10 +319,14 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(reg_h); app.add_handler(cat_h)
     app.add_handler(CallbackQueryHandler(full_report, pattern="^full_report$"))
+    app.add_handler(CallbackQueryHandler(menu_fixed, pattern="^menu_fixed$"))
     app.add_handler(CallbackQueryHandler(menu_delete, pattern="^menu_delete$"))
     app.add_handler(CallbackQueryHandler(delete_item, pattern="^kill_"))
+    app.add_handler(CallbackQueryHandler(chart_pie, pattern="^chart_pie$"))
     app.add_handler(CallbackQueryHandler(ai_coach, pattern="^ai_coach$"))
     app.add_handler(CallbackQueryHandler(toggle_mode, pattern="^toggle_mode$"))
+    app.add_handler(CallbackQueryHandler(export_pdf, pattern="^export_pdf$"))
+    app.add_handler(CallbackQueryHandler(export_csv, pattern="^export_csv$"))
     app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel$"))
     
     app.run_polling(drop_pending_updates=True)
