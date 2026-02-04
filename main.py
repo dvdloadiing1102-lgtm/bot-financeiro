@@ -6,7 +6,6 @@ import io
 import csv
 from datetime import datetime, timedelta
 
-# Importações das bibliotecas (certifique-se de que estão no Build Command do Render)
 import google.generativeai as genai
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import letter
@@ -17,7 +16,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 # ================= CONFIGURAÇÃO =================
 TOKEN = "8314300130:AAGLrTqIZDpPbWug-Rtj6sa0LpPCK15e6qI" 
 GEMINI_KEY = "AIzaSyAV-9NqZ60BNapV4-ADQ1gSRffRkpeu4-w" 
-DB_FILE = "finance_v16_database.json"
+DB_FILE = "finance_v17_database.json"
 
 logging.basicConfig(level=logging.INFO)
 genai.configure(api_key=GEMINI_KEY)
@@ -41,11 +40,11 @@ def save_db(data):
 
 db = load_db()
 
-# ================= ESTADOS DO FLUXO =================
+# ================= ESTADOS =================
 (REG_TYPE, REG_VALUE, REG_WALLET, REG_CAT, REG_DESC, 
- NEW_CAT_TYPE, NEW_CAT_NAME, ADD_FIX_TYPE, ADD_FIX_DATA) = range(9)
+ NEW_CAT_TYPE, NEW_CAT_NAME) = range(7)
 
-# ================= CÁLCULOS TOTAIS =================
+# ================= CÁLCULOS =================
 def calculate_balance():
     mes_atual = datetime.now().strftime("%m/%Y")
     ganhos_fixos = sum(f['value'] for f in db["fixed"] if f['type'] == 'ganho')
@@ -60,7 +59,6 @@ async def start(update, context):
     context.user_data.clear()
     saldo, t_in, t_out = calculate_balance()
     mode = "🤡 Zoeiro: ON" if db["config"]["zoeiro_mode"] else "🤖 Modo: Sério"
-    
     kb = [
         [InlineKeyboardButton("📝 REGISTRAR", callback_data="start_reg"), InlineKeyboardButton("🔍 RAIO-X", callback_data="full_report")],
         [InlineKeyboardButton("📌 FIXOS", callback_data="menu_fixed"), InlineKeyboardButton("🧠 COACH IA", callback_data="ai_coach")],
@@ -68,40 +66,40 @@ async def start(update, context):
         [InlineKeyboardButton("🗑️ EXCLUIR", callback_data="menu_delete"), InlineKeyboardButton(mode, callback_data="toggle_mode")],
         [InlineKeyboardButton("📄 PDF", callback_data="export_pdf"), InlineKeyboardButton("📂 CSV", callback_data="export_csv")]
     ]
+    txt = f"🤖 **FINANCEIRO V17.0**\n\n💰 **Saldo Real:** R$ {saldo:.2f}\n📈 Ganhos: R$ {t_in:.2f}\n📉 Gastos: R$ {t_out:.2f}"
     
-    txt = f"🤖 **FINANCEIRO V16.0**\n\n💰 **Saldo Real:** R$ {saldo:.2f}\n📈 Ganhos: R$ {t_in:.2f}\n📉 Gastos: R$ {t_out:.2f}"
-    
-    msg = update.callback_query.message if update.callback_query else update.message
-    await (msg.edit_text if update.callback_query else msg.reply_text)(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    if update.callback_query:
+        await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     return ConversationHandler.END
 
-# ================= FUNÇÕES DO RAIO-X =================
+# ================= RAIO-X (CORRIGIDO) =================
 async def full_report(update, context):
     query = update.callback_query; await query.answer()
     mes = datetime.now().strftime("%m/%Y")
     saldo, t_in, t_out = calculate_balance()
     trans = [t for t in db["transactions"] if mes in t['date'] and t['type'] == 'gasto']
-    
     cats = {}
     for t in trans: cats[t['category']] = cats.get(t['category'], 0) + t['value']
     
-    msg = f"🔍 **RAIO-X DE {mes}**\n\n📈 Entradas Totais: R$ {t_in:.2f}\n📉 Saídas Totais: R$ {t_out:.2f}\n⚖️ **Saldo: R$ {saldo:.2f}**\n\n**GASTOS POR CATEGORIA:**\n"
+    msg = f"🔍 **RAIO-X DE {mes}**\n\n📈 Entradas: R$ {t_in:.2f}\n📉 Saídas: R$ {t_out:.2f}\n⚖️ **Saldo: R$ {saldo:.2f}**\n\n**DETALHES:**\n"
     for c, v in sorted(cats.items(), key=lambda x:x[1], reverse=True):
         msg += f"🔸 {c}: R$ {v:.2f}\n"
     
-    await query.edit_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]), parse_mode="Markdown")
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]), parse_mode="Markdown")
 
-# ================= FUNÇÕES DE CATEGORIA =================
+# ================= CATEGORIA (CORRIGIDO) =================
 async def menu_cat(update, context):
     query = update.callback_query; await query.answer()
-    kb = [[InlineKeyboardButton("Gasto", callback_data="ncat_gasto"), InlineKeyboardButton("Ganho", callback_data="ncat_ganho")], [InlineKeyboardButton("🔙 Cancelar", callback_data="cancel")]]
-    await query.edit_text("Adicionar categoria em qual lista?", reply_markup=InlineKeyboardMarkup(kb))
+    kb = [[InlineKeyboardButton("Gasto", callback_data="ncat_gasto"), InlineKeyboardButton("Ganho", callback_data="ncat_ganho")], [InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]
+    await query.edit_message_text("Adicionar categoria em qual lista?", reply_markup=InlineKeyboardMarkup(kb))
     return NEW_CAT_TYPE
 
 async def new_cat_type(update, context):
     query = update.callback_query; await query.answer()
     context.user_data["ncat_t"] = query.data.split("_")[1]
-    await query.edit_text("✍️ Digite o nome da nova categoria:")
+    await query.edit_message_text("✍️ Digite o nome da nova categoria:")
     return NEW_CAT_NAME
 
 async def new_cat_save(update, context):
@@ -109,12 +107,12 @@ async def new_cat_save(update, context):
     db["categories"][tipo].append(update.message.text.strip())
     save_db(db); await update.message.reply_text("✅ Categoria adicionada!"); return await start(update, context)
 
-# ================= FUNÇÕES DE EXCLUSÃO =================
+# ================= EXCLUIR (CORRIGIDO) =================
 async def menu_delete(update, context):
     query = update.callback_query; await query.answer()
     kb = [[InlineKeyboardButton(f"❌ {t['value']} - {t['category']}", callback_data=f"kill_{t['id']}")] for t in reversed(db["transactions"][-5:])]
     kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="cancel")])
-    await query.edit_text("🗑️ **Selecione para apagar:**", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text("🗑️ **Selecione para apagar:**", reply_markup=InlineKeyboardMarkup(kb))
 
 async def delete_item(update, context):
     query = update.callback_query; await query.answer()
@@ -122,17 +120,17 @@ async def delete_item(update, context):
     db["transactions"] = [t for t in db["transactions"] if t['id'] != tid]
     save_db(db); return await start(update, context)
 
-# ================= FLUXO DE REGISTRO PASSO A PASSO =================
+# ================= REGISTRO (CORRIGIDO) =================
 async def start_reg(update, context):
     query = update.callback_query; await query.answer()
     kb = [[InlineKeyboardButton("📉 GASTO", callback_data="reg_gasto"), InlineKeyboardButton("📈 GANHO", callback_data="reg_ganho")]]
-    await query.edit_text("🏦 **Tipo de registro:**", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text("🏦 **Tipo de registro:**", reply_markup=InlineKeyboardMarkup(kb))
     return REG_TYPE
 
 async def reg_type(update, context):
     query = update.callback_query; await query.answer()
     context.user_data["temp_type"] = query.data.split("_")[1]
-    await query.edit_text("💰 **Qual o valor?**")
+    await query.edit_message_text("💰 **Qual o valor?**")
     return REG_VALUE
 
 async def reg_value(update, context):
@@ -148,13 +146,13 @@ async def reg_wallet(update, context):
     context.user_data["temp_wallet"] = query.data.replace("wal_", "")
     cats = db["categories"][context.user_data["temp_type"]]
     kb = [[InlineKeyboardButton(c, callback_data=f"cat_{c}") for c in cats[i:i+2]] for i in range(0, len(cats), 2)]
-    await query.edit_text("📂 **Qual categoria?**", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text("📂 **Qual categoria?**", reply_markup=InlineKeyboardMarkup(kb))
     return REG_CAT
 
 async def reg_cat(update, context):
     query = update.callback_query; await query.answer()
     context.user_data["temp_cat"] = query.data.replace("cat_", "")
-    await query.edit_text("✍️ **Descrição?**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏩ Pular", callback_data="skip_desc")]]))
+    await query.edit_message_text("✍️ **Descrição?**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏩ Pular", callback_data="skip_desc")]]))
     return REG_DESC
 
 async def reg_finish(update, context):
@@ -166,32 +164,28 @@ async def reg_finish(update, context):
     })
     save_db(db); return await start(update, context)
 
-# ================= FUNÇÃO CANCELAR =================
-async def cancel(update, context):
-    await start(update, context)
-    return ConversationHandler.END
+async def cancel(update, context): await start(update, context); return ConversationHandler.END
 
-# ================= MODO ZOMEIRO E IA =================
+# ================= IA E FIXOS (CORRIGIDO) =================
+async def ai_coach(update, context):
+    query = update.callback_query; await query.answer()
+    await query.edit_message_text("🧠 **Gemini analisando...**")
+    saldo, t_in, t_out = calculate_balance()
+    prompt = "Consultor financeiro. " + ("Sarcástico" if db["config"]["zoeiro_mode"] else "Sério")
+    try:
+        resp = model_ai.generate_content(f"{prompt}. Saldo:{saldo}")
+        await query.edit_message_text(f"🧠 **IA:**\n\n{resp.text}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
+    except: await query.edit_message_text("❌ Erro na IA.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
+
 async def toggle_mode(update, context):
     db["config"]["zoeiro_mode"] = not db["config"]["zoeiro_mode"]
     save_db(db); return await start(update, context)
 
-async def ai_coach(update, context):
-    query = update.callback_query; await query.answer()
-    await query.edit_text("🧠 **Gemini analisando...**")
-    saldo, t_in, t_out = calculate_balance()
-    prompt = "És um consultor financeiro. " + ("Sê sarcástico e goza com o utilizador." if db["config"]["zoeiro_mode"] else "Dá um conselho sério.")
-    try:
-        resp = model_ai.generate_content(f"{prompt} Saldo: {saldo}, Entradas: {t_in}, Saídas: {t_out}")
-        await query.edit_text(f"🧠 **COACH IA:**\n\n{resp.text}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
-    except: await query.edit_text("❌ Erro na IA.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]))
-
-# ================= EXECUÇÃO FINAL =================
+# ================= EXECUÇÃO =================
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     
-    # Handler de Registro
-    reg_handler = ConversationHandler(
+    reg_h = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_reg, pattern="^start_reg$")],
         states={
             REG_TYPE: [CallbackQueryHandler(reg_type)],
@@ -202,8 +196,7 @@ if __name__ == "__main__":
         }, fallbacks=[CallbackQueryHandler(cancel, pattern="^cancel$")]
     )
     
-    # Handler de Categoria
-    cat_handler = ConversationHandler(
+    cat_h = ConversationHandler(
         entry_points=[CallbackQueryHandler(menu_cat, pattern="^menu_cat$")],
         states={
             NEW_CAT_TYPE: [CallbackQueryHandler(new_cat_type)],
@@ -212,8 +205,7 @@ if __name__ == "__main__":
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(reg_handler)
-    app.add_handler(cat_handler)
+    app.add_handler(reg_h); app.add_handler(cat_h)
     app.add_handler(CallbackQueryHandler(full_report, pattern="^full_report$"))
     app.add_handler(CallbackQueryHandler(menu_delete, pattern="^menu_delete$"))
     app.add_handler(CallbackQueryHandler(delete_item, pattern="^kill_"))
@@ -221,5 +213,4 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(toggle_mode, pattern="^toggle_mode$"))
     app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel$"))
     
-    print("🚀 BOT V16 ONLINE! LIMPANDO CONEXÕES ANTIGAS...")
     app.run_polling(drop_pending_updates=True)
