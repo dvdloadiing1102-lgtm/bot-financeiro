@@ -27,7 +27,7 @@ except ImportError:
 # ================= CONFIGURAÇÃO =================
 TOKEN = "8314300130:AAGLrTqIZDpPbWug-Rtj6sa0LpPCK15e6qI" 
 GEMINI_KEY = "AIzaSyAV-9NqZ60BNapV4-ADQ1gSRffRkpeu4-w" 
-DB_FILE = "finance_v9_ultimate.json"
+DB_FILE = "finance_v10_final.json"
 
 logging.basicConfig(level=logging.INFO)
 genai.configure(api_key=GEMINI_KEY)
@@ -38,7 +38,7 @@ def load_db():
     default = {
         "transactions": [], 
         "categories": {"ganho": ["Salário", "Extra"], "gasto": ["Alimentação", "Transporte", "Lazer", "Mercado", "Saúde", "Casa"]}, 
-        "wallets": ["Nubank", "Itaú", "Dinheiro", "Inter"],
+        "wallets": ["Nubank", "Itaú", "Dinheiro", "Inter", "VR/VA"],
         "fixed": [], "goals": [], "config": {"zoeiro_mode": False}
     }
     if not os.path.exists(DB_FILE): return default
@@ -65,6 +65,7 @@ def calculate_balance():
     saldo = (ganhos_fixos + trans_ganhos) - (gastos_fixos + trans_gastos)
     return saldo, (ganhos_fixos + trans_ganhos), (gastos_fixos + trans_gastos)
 
+# ================= MENU PRINCIPAL =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     saldo, t_in, t_out = calculate_balance()
@@ -80,7 +81,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🗑️ EXCLUIR", callback_data="menu_delete")]
     ]
     
-    txt = f"🤖 **FINANCEIRO V9**\n\n{emoji} **Saldo Real:** R$ {saldo:.2f}\n📈 Entradas: R$ {t_in:.2f}\n📉 Saídas: R$ {t_out:.2f}"
+    txt = f"🤖 **FINANCEIRO V10**\n\n{emoji} **Saldo Real:** R$ {saldo:.2f}\n📈 Entradas: R$ {t_in:.2f}\n📉 Saídas: R$ {t_out:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -88,52 +89,73 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     return ConversationHandler.END
 
-# ================= HANDLERS DE Categoria / Excluir / Raio-X =================
+# ================= HANDLERS RAIO-X / CATEGORIA / EXCLUIR =================
 
+async def full_report(update, context):
+    query = update.callback_query; await query.answer()
+    mes = datetime.now().strftime("%m/%Y")
+    saldo, t_in, t_out = calculate_balance()
+    
+    trans_mes = [t for t in db["transactions"] if mes in t['date'] and t['type'] == 'gasto']
+    resumo_cats = {}
+    for t in trans_mes:
+        resumo_cats[t['category']] = resumo_cats.get(t['category'], 0) + t['value']
+
+    msg = f"🔍 **RAIO-X DETALHADO ({mes})**\n\n"
+    msg += f"📈 Entradas: R$ {t_in:.2f}\n"
+    msg += f"📉 Saídas: R$ {t_out:.2f}\n"
+    msg += f"⚖️ **Saldo Real: R$ {saldo:.2f}**\n\n"
+    msg += "**GASTOS POR CATEGORIA:**\n"
+    
+    for cat, valor in sorted(resumo_cats.items(), key=lambda x: x[1], reverse=True):
+        msg += f"🔸 {cat}: R$ {valor:.2f}\n"
+        
+    await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]), parse_mode="Markdown")
+
+async def menu_delete(update, context):
+    query = update.callback_query; await query.answer()
+    kb = [[InlineKeyboardButton(f"❌ {t['value']} - {t['category']}", callback_data=f"kill_{t['id']}")] for t in reversed(db["transactions"][-5:])]
+    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="cancel")])
+    await query.edit_message_text("🗑️ **Toque no item para apagar:**", reply_markup=InlineKeyboardMarkup(kb))
+
+async def delete_item(update, context):
+    query = update.callback_query; await query.answer()
+    tid = query.data.replace("kill_", "")
+    db["transactions"] = [t for t in db["transactions"] if t['id'] != tid]
+    save_db(db)
+    return await start(update, context)
+
+# --- FLUXO DE CATEGORIA ---
 async def menu_cat(update, context):
+    query = update.callback_query; await query.answer()
     kb = [[InlineKeyboardButton("Gasto", callback_data="ncat_gasto"), InlineKeyboardButton("Ganho", callback_data="ncat_ganho")], [InlineKeyboardButton("🔙 Cancelar", callback_data="cancel")]]
-    await update.callback_query.edit_message_text("Criar categoria em qual lista?", reply_markup=InlineKeyboardMarkup(kb))
+    await query.edit_message_text("Adicionar categoria em qual lista?", reply_markup=InlineKeyboardMarkup(kb))
     return NEW_CAT_TYPE
 
 async def new_cat_type(update, context):
-    context.user_data["ncat_t"] = update.callback_query.data.split("_")[1]
-    await update.callback_query.edit_message_text("✍️ Digite o nome da nova categoria:")
+    query = update.callback_query; await query.answer()
+    context.user_data["ncat_t"] = query.data.split("_")[1]
+    await query.edit_message_text("✍️ Digite o nome da nova categoria:")
     return NEW_CAT_NAME
 
 async def new_cat_save(update, context):
     tipo = context.user_data["ncat_t"]
-    db["categories"][tipo].append(update.message.text)
-    save_db(db); await update.message.reply_text("✅ Categoria adicionada!"); return await start(update, context)
+    db["categories"][tipo].append(update.message.text.strip())
+    save_db(db)
+    await update.message.reply_text(f"✅ Categoria '{update.message.text}' adicionada!")
+    return await start(update, context)
 
-async def full_report(update, context):
-    mes = datetime.now().strftime("%m/%Y")
-    trans = [t for t in db["transactions"] if mes in t['date']]
-    g_total = sum(t['value'] for t in trans if t['type'] == 'ganho')
-    s_total = sum(t['value'] for t in trans if t['type'] == 'gasto')
-    saldo, t_in, t_out = calculate_balance()
-    
-    msg = f"🔍 **RAIO-X DE {mes}**\n\n📈 Entradas Totais: R$ {t_in:.2f}\n📉 Saídas Totais: R$ {t_out:.2f}\n⚖️ Saldo Real: R$ {saldo:.2f}"
-    await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]), parse_mode="Markdown")
-
-async def menu_delete(update, context):
-    kb = [[InlineKeyboardButton(f"❌ {t['value']} - {t['category']}", callback_data=f"kill_{t['id']}")] for t in reversed(db["transactions"][-5:])]
-    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="cancel")])
-    await update.callback_query.edit_message_text("🗑️ **Toque para apagar:**", reply_markup=InlineKeyboardMarkup(kb))
-
-async def delete_item(update, context):
-    tid = update.callback_query.data.replace("kill_", "")
-    db["transactions"] = [t for t in db["transactions"] if t['id'] != tid]
-    save_db(db); return await start(update, context)
-
-# --- REGRAS DE REGISTRO PASSO A PASSO ---
+# --- FLUXO DE REGISTRO DETALHADO ---
 async def start_reg(update, context):
-    kb = [[InlineKeyboardButton("📉 GASTO", callback_data="type_gasto"), InlineKeyboardButton("📈 GANHO", callback_data="type_ganho")], [InlineKeyboardButton("🔙 Cancelar", callback_data="cancel")]]
-    await update.callback_query.edit_message_text("🏦 **Gasto ou Ganho?**", reply_markup=InlineKeyboardMarkup(kb))
+    query = update.callback_query; await query.answer()
+    kb = [[InlineKeyboardButton("📉 GASTO", callback_data="type_gasto"), InlineKeyboardButton("📈 GANHO", callback_data="type_ganho")], [InlineKeyboardButton("🔙 Sair", callback_data="cancel")]]
+    await query.edit_message_text("🏦 **Gasto ou Ganho?**", reply_markup=InlineKeyboardMarkup(kb))
     return REG_TYPE
 
 async def reg_type(update, context):
-    context.user_data["temp_type"] = update.callback_query.data.split("_")[1]
-    await update.callback_query.edit_message_text("💰 **Valor?**")
+    query = update.callback_query; await query.answer()
+    context.user_data["temp_type"] = query.data.split("_")[1]
+    await query.edit_message_text("💰 **Valor?** (Ex: 50.00)")
     return REG_VALUE
 
 async def reg_value(update, context):
@@ -145,45 +167,70 @@ async def reg_value(update, context):
     except: await update.message.reply_text("❌ Valor inválido."); return REG_VALUE
 
 async def reg_wallet(update, context):
-    context.user_data["temp_wallet"] = update.callback_query.data.replace("wallet_", "")
+    query = update.callback_query; await query.answer()
+    context.user_data["temp_wallet"] = query.data.replace("wallet_", "")
     if context.user_data["temp_type"] == "gasto":
         kb = [[InlineKeyboardButton("À Vista", callback_data="parc_1")], [InlineKeyboardButton("12x", callback_data="parc_12")]]
-        await update.callback_query.edit_message_text("📅 **Parcelado?**", reply_markup=InlineKeyboardMarkup(kb)); return REG_PARCELAS
+        await query.edit_message_text("📅 **Parcelado?**", reply_markup=InlineKeyboardMarkup(kb))
+        return REG_PARCELAS
     context.user_data["temp_parc"] = 1; return await ask_cat(update, context)
+
+async def reg_parcelas(update, context):
+    query = update.callback_query; await query.answer()
+    context.user_data["temp_parc"] = int(query.data.replace("parc_", ""))
+    return await ask_cat(update, context)
 
 async def ask_cat(update, context):
     cats = db["categories"][context.user_data["temp_type"]]
     kb = [[InlineKeyboardButton(c, callback_data=f"cat_{c}") for c in cats[i:i+2]] for i in range(0, len(cats), 2)]
-    await (update.callback_query.edit_message_text if update.callback_query else update.message.reply_text)("📂 **Categoria:**", reply_markup=InlineKeyboardMarkup(kb))
+    msg = update.callback_query if update.callback_query else update.message
+    await (msg.edit_message_text if update.callback_query else msg.reply_text)("📂 **Categoria:**", reply_markup=InlineKeyboardMarkup(kb))
     return REG_CAT
+
+async def reg_cat(update, context):
+    query = update.callback_query; await query.answer()
+    context.user_data["temp_cat"] = query.data.replace("cat_", "")
+    await query.edit_message_text("✍️ **Descrição (Uber, etc):**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏩ Pular", callback_data="desc_Sem Descrição")]]))
+    return REG_DESC
 
 async def reg_finish(update, context):
     desc = update.callback_query.data.replace("desc_", "") if update.callback_query else update.message.text
     parc = context.user_data.get("temp_parc", 1)
     val = context.user_data["temp_value"] / parc
     for i in range(parc):
-        db["transactions"].append({"id": str(uuid.uuid4())[:8], "type": context.user_data["temp_type"], "value": val, "category": context.user_data.get("temp_cat", "Geral"), "wallet": context.user_data["temp_wallet"], "description": desc, "date": (datetime.now() + timedelta(days=30*i)).strftime("%d/%m/%Y %H:%M")})
-    save_db(db); return await start(update, context)
+        db["transactions"].append({"id": str(uuid.uuid4())[:8], "type": context.user_data["temp_type"], "value": val, "category": context.user_data["temp_cat"], "wallet": context.user_data["temp_wallet"], "description": desc, "date": (datetime.now() + timedelta(days=30*i)).strftime("%d/%m/%Y %H:%M")})
+    save_db(db)
+    return await start(update, context)
 
-async def cancel(update, context): await start(update, context); return ConversationHandler.END
+# --- FIXOS E OUTROS ---
+async def menu_fixed(update, context):
+    query = update.callback_query; await query.answer()
+    kb = [[InlineKeyboardButton("➕ Add Fixo", callback_data="add_fixed_start")], [InlineKeyboardButton("🔙 Voltar", callback_data="cancel")]]
+    txt = "📌 **FIXOS (Salário/Contas):**\n"
+    for f in db["fixed"]: txt += f"\n{'📈' if f['type'] == 'ganho' else '📉'} {f['name']}: R$ {f['value']:.2f}"
+    await query.edit_message_text(txt if db["fixed"] else "Nenhum fixo.", reply_markup=InlineKeyboardMarkup(kb))
 
-# ================= EXECUÇÃO FINAL =================
+async def cancel(update, context): 
+    await start(update, context)
+    return ConversationHandler.END
+
+# ================= EXECUÇÃO =================
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
-    reg_h = ConversationHandler(
+    reg_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_reg, pattern="^start_reg$")],
         states={
             REG_TYPE: [CallbackQueryHandler(reg_type)], 
             REG_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reg_value)],
             REG_WALLET: [CallbackQueryHandler(reg_wallet)],
-            REG_PARCELAS: [CallbackQueryHandler(lambda u,c: (c.user_data.update({"temp_parc": int(u.callback_query.data.split("_")[1])}), ask_cat(u,c))[1])],
-            REG_CAT: [CallbackQueryHandler(lambda u,c: (c.user_data.update({"temp_cat": u.callback_query.data.split("_")[1]}), u.callback_query.edit_message_text("✍️ Descrição:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⏩ Pular", callback_data="desc_Sem Descrição")]])))[1])],
-            REG_DESC: [CallbackQueryHandler(reg_finish, pattern="^desc_"), MessageHandler(filters.TEXT & ~filters.COMMAND, reg_finish)]
+            REG_PARCELAS: [CallbackQueryHandler(reg_parcelas)],
+            REG_CAT: [CallbackQueryHandler(reg_cat)], 
+            REG_DESC: [CallbackQueryHandler(reg_finish), MessageHandler(filters.TEXT & ~filters.COMMAND, reg_finish)]
         }, fallbacks=[CallbackQueryHandler(cancel, pattern="^cancel$")]
     )
 
-    cat_h = ConversationHandler(
+    cat_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(menu_cat, pattern="^menu_cat$")],
         states={
             NEW_CAT_TYPE: [CallbackQueryHandler(new_cat_type)],
@@ -192,11 +239,19 @@ if __name__ == "__main__":
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(reg_h); app.add_handler(cat_h)
+    app.add_handler(reg_handler)
+    app.add_handler(cat_handler)
     app.add_handler(CallbackQueryHandler(full_report, pattern="^full_report$"))
     app.add_handler(CallbackQueryHandler(menu_delete, pattern="^menu_delete$"))
     app.add_handler(CallbackQueryHandler(delete_item, pattern="^kill_"))
+    app.add_handler(CallbackQueryHandler(menu_fixed, pattern="^menu_fixed$"))
     app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel$"))
     
-    print("🚀 BOT V9 ULTIMATE RODANDO...")
+    # Toggle modo zoeiro rápido
+    async def toggle(u, c):
+        db["config"]["zoeiro_mode"] = not db["config"]["zoeiro_mode"]; save_db(db)
+        return await start(u, c)
+    app.add_handler(CallbackQueryHandler(toggle, pattern="^toggle_mode$"))
+    
+    print("🚀 BOT V10 TESTADO E ONLINE!")
     app.run_polling()
