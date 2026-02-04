@@ -1,4 +1,4 @@
-import os
+Aimport os
 import json
 import logging
 import uuid
@@ -13,7 +13,7 @@ from telegram.ext import (
 import google.generativeai as genai
 
 # ================= CONFIG =================
-TOKEN = os.getenv("BOT_TOKEN") or "COLOQUE_SEU_TOKEN"
+TOKEN = os.getenv("BOT_TOKEN") or "8314300130:AAGLrTqIZDpPbWug-Rtj6sa0LpPCK15e6qI"
 GEMINI_KEY = os.getenv("GEMINI_KEY") or "COLOQUE_SUA_KEY"
 DB_FILE = "finance_v15_data.json"
 
