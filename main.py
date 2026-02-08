@@ -1,385 +1,379 @@
 import os
-import sys
+import json
 import logging
-import asyncio
-import feedparser
-import httpx
-import threading
-import unicodedata
-import psutil
-import random
-from datetime import datetime, timezone, timedelta, time
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from dotenv import load_dotenv
+import uuid
+import io
+import csv
+import time
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta # pip install python-dateutil
 
+import google.generativeai as genai
+import matplotlib
+matplotlib.use('Agg') # Backend não-interativo para servidores
+import matplotlib.pyplot as plt
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, ConversationHandler, filters
 
-# --- LOGS ---
+# ================= CONFIGURAÇÃO =================
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+
+# ⚠️ SEGURANÇA: Coloque seu ID do Telegram aqui para bloquear estranhos
+# Mande uma mensagem pro bot, ele vai printar seu ID no log se não estiver aqui.
+ALLOWED_USERS = [int(x) for x in os.getenv("ALLOWED_USERS", "0").split(",")] 
+# Exemplo no render env: ALLOWED_USERS = 12345678,87654321
+
+DB_FILE = "finance_v18_ultimate.json"
+
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    # Flash é mais rápido e barato, suporta imagem e texto
+    model_ai = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    logger.warning("GEMINI_API_KEY faltando!")
 
-# --- CONFIGURAÇÕES ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-PORT = int(os.getenv("PORT", 10000))
-AFFILIATE_LINK = os.getenv("AFFILIATE_LINK", "https://www.bet365.com") 
-ADMIN_ID = os.getenv("ADMIN_ID")
-THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
-
-SENT_LINKS = set()
-LATEST_HEADLINES = []
-
-# LISTA VIP (PONTUAÇÃO MÁXIMA - TOPO DA LISTA)
-VIP_TEAMS = [
-    "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO", "GREMIO", "INTERNACIONAL",
-    "REAL MADRID", "BARCELONA", "ATLETICO MADRID",
-    "MANCHESTER CITY", "LIVERPOOL", "ARSENAL", "CHELSEA", "MANCHESTER UNITED", "TOTTENHAM", "NEWCASTLE",
-    "PSG", "BAYERN MUNICH", "DORTMUND", "LEVERKUSEN",
-    "INTER MILAN", "AC MILAN", "JUVENTUS", "NAPOLI",
-    "INTER MIAMI", "AL NASSR", "AL HILAL"
-]
-
-# LIGAS ELITE (PESOS DE PRIORIDADE)
-SOCCER_LEAGUES = [
-    {"key": "soccer_england_premier_league", "name": "PREMIER LEAGUE", "weight": 2000},
-    {"key": "soccer_uefa_champs_league", "name": "CHAMPIONS LEAGUE", "weight": 2000},
-    {"key": "soccer_brazil_campeonato", "name": "BRASILEIRÃO A", "weight": 1500},
-    {"key": "soccer_spain_la_liga", "name": "LA LIGA", "weight": 1000},
-    {"key": "soccer_italy_serie_a", "name": "SERIE A", "weight": 1000},
-    {"key": "soccer_germany_bundesliga", "name": "BUNDESLIGA", "weight": 1000},
-    {"key": "soccer_france_ligue_one", "name": "LIGUE 1", "weight": 500},
-    {"key": "soccer_brazil_campeonato_paulista", "name": "PAULISTA A1", "weight": 200},
-    {"key": "soccer_brazil_campeonato_carioca", "name": "CARIOCA A1", "weight": 200}
-]
-
-def normalize_name(name):
-    if not name: return ""
-    return ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn').upper()
-
-class FakeHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V126 - FULL TRANSPARENCY")
-def run_web_server():
-    try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
-    except: pass
-
-async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
-    global LATEST_HEADLINES
+# ================= BANCO DE DADOS & MIGRATION =================
+def load_db():
+    default = {
+        "transactions": [], 
+        "categories": {
+            "ganho": ["Salário", "Extra", "Investimento"], 
+            "gasto": ["Alimentação", "Transporte", "Lazer", "Mercado", "Casa", "Saúde", "Compras", "Assinaturas"]
+        }, 
+        "wallets": ["Nubank", "Itaú", "Dinheiro", "Inter", "VR/VA", "Cartão Crédito"],
+        "budgets": {"Alimentação": 800, "Lazer": 300}, # Metas mensais
+        "achievements": [], # Conquistas desbloqueadas
+        "fixed": [], 
+        "config": {"zoeiro_mode": False}
+    }
+    if not os.path.exists(DB_FILE): return default
     try:
-        def get_feed(): return feedparser.parse("https://ge.globo.com/rss/ge/")
-        feed = await asyncio.get_running_loop().run_in_executor(None, get_feed)
-        whitelist = ["lesão", "vetado", "fora", "contratado", "vendido", "reforço", "escalação"]
-        blacklist = ["bbb", "festa", "namorada"]
-        LATEST_HEADLINES = [entry.title for entry in feed.entries[:20]]
-        c=0
-        for entry in feed.entries:
-            if entry.link in SENT_LINKS: continue
-            if any(w in entry.title.lower() for w in whitelist) and not any(b in entry.title.lower() for b in blacklist):
-                await context.bot.send_message(chat_id=CHANNEL_ID, text=f"⚠️ **BOLETIM**\n\n📰 {entry.title}\n🔗 {entry.link}")
-                SENT_LINKS.add(entry.link)
-                c+=1
-                if c>=2: break
-        if len(SENT_LINKS)>500: SENT_LINKS.clear()
-    except: pass
+        with open(DB_FILE, "r") as f: 
+            data = json.load(f)
+            # Migration simples para garantir chaves novas
+            for k in default:
+                if k not in data: data[k] = default[k]
+            return data
+    except: return default
 
-# ================= MOTOR V126 (TRANSPARÊNCIA TOTAL) =================
-class SportsEngine:
-    def __init__(self):
-        self.daily_accumulator = []
+def save_db(data):
+    with open(DB_FILE, "w") as f: json.dump(data, f, indent=2)
 
-    async def test_all_connections(self):
-        report = "📊 **STATUS V126**\n\n"
-        mem = psutil.virtual_memory()
-        report += f"💻 RAM: {mem.percent}%\n"
+db = load_db()
+
+# ================= DECORATOR DE SEGURANÇA =================
+def restricted(func):
+    async def wrapped(update, context, *args, **kwargs):
+        user_id = update.effective_user.id
+        if ALLOWED_USERS and 0 not in ALLOWED_USERS and user_id not in ALLOWED_USERS:
+            await update.message.reply_text(f"⛔ Acesso negado. Seu ID: {user_id}")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapped
+
+# ================= LÓGICA FINANCEIRA =================
+def calculate_balance(target_date=None):
+    if not target_date: target_date = datetime.now()
+    mes_str = target_date.strftime("%m/%Y")
+    
+    ganhos_fixos = sum(f['value'] for f in db["fixed"] if f['type'] == 'ganho')
+    gastos_fixos = sum(f['value'] for f in db["fixed"] if f['type'] == 'gasto')
+    
+    trans_ganhos = sum(t['value'] for t in db["transactions"] if t['type'] == 'ganho' and mes_str in t['date'])
+    trans_gastos = sum(t['value'] for t in db["transactions"] if t['type'] == 'gasto' and mes_str in t['date'])
+    
+    saldo_mes = (ganhos_fixos + trans_ganhos) - (gastos_fixos + trans_gastos)
+    
+    # Saldo acumulado (simplificado)
+    total_in = sum(t['value'] for t in db["transactions"] if t['type'] == 'ganho')
+    total_out = sum(t['value'] for t in db["transactions"] if t['type'] == 'gasto')
+    saldo_total = total_in - total_out
+    
+    return saldo_mes, (ganhos_fixos + trans_ganhos), (gastos_fixos + trans_gastos), saldo_total
+
+def check_achievements(update):
+    new_unlocks = []
+    # Exemplo: Mão de Vaca (Gasto < 50 em Lazer no mes) - Lógica simplificada
+    if len(db["transactions"]) > 10 and "Iniciante" not in db["achievements"]:
+        db["achievements"].append("Iniciante")
+        new_unlocks.append("🥉 Iniciante: Registrou 10 transações!")
+    
+    # Adicione mais lógicas aqui
+    return new_unlocks
+
+def check_budget_alert(category, value_added):
+    limit = db["budgets"].get(category, 0)
+    if limit == 0: return None
+    
+    mes = datetime.now().strftime("%m/%Y")
+    gastos_cat = sum(t['value'] for t in db["transactions"] 
+                     if t['category'] == category and t['type'] == 'gasto' and mes in t['date'])
+    
+    pct = (gastos_cat / limit) * 100
+    if pct >= 100: return f"🚨 **ALERTA:** Você estourou o orçamento de {category} ({pct:.1f}%)!"
+    elif pct >= 80: return f"⚠️ **Aviso:** Você já usou {pct:.1f}% do orçamento de {category}."
+    return None
+
+# ================= PROCESSAMENTO IA (TEXTO E IMAGEM) =================
+async def process_smart_entry(update, context):
+    user_msg = update.message
+    
+    prompt = """
+    Atue como um assistente financeiro (JSON Parser).
+    Analise o texto ou imagem fornecida. Extraia os dados da transação.
+    
+    Regras:
+    1. Identifique: type ('gasto', 'ganho', 'transferencia'), value (float), category (classifique na melhor possível), wallet (qual carteira/banco), description (resumo), date (DD/MM/YYYY), installments (int, 1 se não parcelado).
+    2. Se for 'transferencia', 'wallet' é a origem e coloque o destino na 'description'.
+    3. Categorias existentes: Alimentação, Transporte, Lazer, Mercado, Casa, Saúde, Compras, Salário, Extra.
+    4. Carteiras existentes: Nubank, Itaú, Dinheiro, Inter, Cartão Crédito.
+    5. Se não identificar carteira, assuma 'Nubank'. Se não identificar categoria, assuma 'Outros'.
+    6. Se o usuário falar em parcelas (ex: "em 10x"), defina 'installments'.
+    7. Converta moedas para BRL se necessário.
+    
+    Retorne APENAS um JSON válido neste formato, sem Markdown:
+    {"type": "gasto", "value": 50.00, "category": "Alimentação", "wallet": "Nubank", "description": "Lanche", "date": "08/02/2026", "installments": 1}
+    
+    Se não for financeiro, retorne: {"error": "Não entendi"}
+    """
+
+    content = []
+    content.append(prompt)
+    
+    # Se tiver imagem
+    if user_msg.photo:
+        wait_msg = await user_msg.reply_text("👁️ Analisando imagem...")
+        file_id = user_msg.photo[-1].file_id
+        file = await context.bot.get_file(file_id)
+        file_bytes = await file.download_as_bytearray()
         
-        if THE_ODDS_API_KEY:
-            async with httpx.AsyncClient(timeout=10) as client:
-                try:
-                    r = await client.get(f"https://api.the-odds-api.com/v4/sports?apiKey={THE_ODDS_API_KEY}")
-                    if r.status_code == 200: 
-                        rem = r.headers.get("x-requests-remaining", "?")
-                        report += f"✅ The Odds API: {rem} restantes\n"
-                    else: report += "❌ The Odds API: Erro Key\n"
-                except: report += "❌ The Odds API: Erro Conexão\n"
-        else: report += "⚠️ CHAVE API FALTANDO\n"
-        return report
+        # Converte para formato aceito pelo Gemini
+        image_part = {"mime_type": "image/jpeg", "data": file_bytes}
+        content.append(image_part)
+        content.append("Extraia os dados deste comprovante/nota.")
+    else:
+        wait_msg = await user_msg.reply_text("🧠 Processando texto...")
+        content.append(f"Texto do usuário: {user_msg.text}")
 
-    async def fetch_odds(self, sport_key, display_name, weight):
-        if not THE_ODDS_API_KEY: return []
+    try:
+        response = model_ai.generate_content(content)
+        cleaned_text = response.text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(cleaned_text)
         
-        url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds?regions=us&oddsFormat=decimal&markets=h2h&apiKey={THE_ODDS_API_KEY}"
+        if data.get("error"):
+            await wait_msg.edit_text("❌ Não identifiquei uma transação válida.")
+            return
+
+        # Processamento de Parcelas
+        installments = data.get("installments", 1)
+        base_date = datetime.strptime(data.get("date", datetime.now().strftime("%d/%m/%Y")), "%d/%m/%Y")
+        total_val = data['value']
         
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                r = await client.get(url)
-                data = r.json()
-                if not isinstance(data, list): return []
-                
-                games = []
-                now = datetime.now(timezone.utc)
-                limit_time = now + timedelta(hours=30) 
-                
-                for event in data:
-                    try:
-                        evt_time = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
-                        if evt_time > limit_time or evt_time < now: continue 
-
-                        time_str = evt_time.astimezone(timezone(timedelta(hours=-3))).strftime("%H:%M")
-                        h = event['home_team']
-                        a = event['away_team']
-                        
-                        match_score = weight 
-                        h_norm = normalize_name(h)
-                        a_norm = normalize_name(a)
-                        
-                        is_vip = False
-                        for vip in VIP_TEAMS:
-                            if vip in h_norm or vip in a_norm:
-                                match_score += 100000 
-                                is_vip = True
-                                break
-                        
-                        odds_h, odds_a, odds_d = 0, 0, 0
-                        for book in event['bookmakers']:
-                            for m in book['markets']:
-                                if m['key'] == 'h2h':
-                                    for o in m['outcomes']:
-                                        if o['name'] == h: odds_h = max(odds_h, o['price'])
-                                        if o['name'] == a: odds_a = max(odds_a, o['price'])
-                                        if o['name'] == 'Draw': odds_d = max(odds_d, o['price'])
-                        
-                        if odds_h > 1.0 and odds_a > 1.0:
-                            games.append({
-                                "match": f"{h} x {a}",
-                                "league": display_name,
-                                "time": time_str,
-                                "datetime": evt_time,
-                                "odd_h": odds_h,
-                                "odd_a": odds_a,
-                                "odd_d": odds_d,
-                                "home": h,
-                                "away": a,
-                                "match_score": match_score,
-                                "is_vip": is_vip
-                            })
-                    except: continue
-                return games
-            except: return []
-
-    def analyze_game(self, game):
-        lines = []
-        best_pick = None
+        # Se for parcelado, divide o valor (ou mantém se a IA entender que o valor é da parcela)
+        # Vamos assumir que o valor informado é o total da compra, a menos que IA diga o contrario.
+        # Simplificação: IA retorna valor da parcela se detectar "10x de 50".
         
-        has_news = False
-        for news in LATEST_HEADLINES:
-            if normalize_name(game['home']) in normalize_name(news) or normalize_name(game['away']) in normalize_name(news):
-                has_news = True
+        msgs_out = []
         
-        if has_news: lines.append("📰 **Radar:** Notícias recentes detectadas no GE.")
-
-        oh, oa, od = game['odd_h'], game['odd_a'], game['odd_d']
-
-        # ESTRATÉGIA: SEGURANÇA (Verde)
-        if 1.15 < oh < 1.75:
-            lines.append(f"🟢 **Segura:** {game['home']} Vence (@{oh})")
-            best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}
-        elif 1.15 < oa < 1.75:
-            lines.append(f"🟢 **Segura:** {game['away']} Vence (@{oa})")
-            best_pick = {"pick": f"{game['away']}", "odd": oa, "match": game['match']}
-        elif 1.25 < oh < 2.30 and od > 0:
-            dc_odd = round(1 / (1/oh + 1/od), 2)
-            if 1.15 < dc_odd < 1.60:
-                 lines.append(f"🟢 **Segura:** {game['home']} ou Empate (@{dc_odd})")
-                 if not best_pick: best_pick = {"pick": f"{game['home']} ou Empate", "odd": dc_odd, "match": game['match']}
-
-        # SE NÃO ACHOU SEGURA, MOSTRA O QUE TEM (V126)
-        if not lines:
-            if oh < 2.05: 
-                lines.append(f"🟡 **Valor:** {game['home']} (@{oh})")
-                best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}
-            elif oa < 2.05: 
-                lines.append(f"🟡 **Valor:** {game['away']} (@{oa})")
-                best_pick = {"pick": f"{game['away']}", "odd": oa, "match": game['match']}
-            else: 
-                # AQUI ESTÁ A MUDANÇA: MOSTRA A ODD CRUA
-                lines.append(f"⚖️ **Equilibrado:** Casa @{oh} | Fora @{oa}")
-
-        return lines, best_pick
-
-    async def get_soccer_grade(self):
-        all_games = []
-        self.daily_accumulator = []
+        for i in range(installments):
+            eff_date = base_date + relativedelta(months=i)
+            desc_final = data['description']
+            if installments > 1:
+                desc_final += f" ({i+1}/{installments})"
+            
+            t = {
+                "id": str(uuid.uuid4())[:8],
+                "type": data['type'],
+                "value": total_val if installments == 1 else (total_val / installments if "x de" not in user_msg.text.lower() else total_val), 
+                # Ajuste fino: Se o usuário diz "100 reais em 2x", é 50/mes. Se diz "2x de 50", é 50/mes. 
+                # A IA geralmente retorna o valor unitário se o prompt for bom, vamos confiar no valor da IA por enquanto.
+                "category": data['category'],
+                "wallet": data['wallet'],
+                "description": desc_final,
+                "date": eff_date.strftime("%d/%m/%Y %H:%M"),
+                "user_id": user_msg.from_user.id
+            }
+            db["transactions"].append(t)
         
-        for league in SOCCER_LEAGUES:
-            games = await self.fetch_odds(league['key'], league['name'], league['weight'])
-            for g in games:
-                report, pick = self.analyze_game(g)
-                g['report'] = report
-                if pick: self.daily_accumulator.append(pick)
-                all_games.append(g)
-            await asyncio.sleep(0.5)
-
-        # Ordena pelo Score (VIP) e Hora
-        all_games.sort(key=lambda x: (-x['match_score'], x['datetime']))
+        save_db(db)
         
-        return all_games
+        # Feedback
+        res_txt = f"✅ **Registrado!**\n{data['type'].upper()}: R$ {data['value']:.2f}\n📂 {data['category']} | 💳 {data['wallet']}\n📝 {data['description']}"
+        if installments > 1: res_txt += f"\n📅 Parcelado em {installments}x"
+        
+        # Alertas
+        alert = check_budget_alert(data['category'], data['value'])
+        if alert: res_txt += f"\n\n{alert}"
+        
+        # Conquistas
+        unlocks = check_achievements(update)
+        for u in unlocks: res_txt += f"\n\n🏆 **CONQUISTA:** {u}"
+        
+        await wait_msg.edit_text(res_txt, parse_mode="Markdown")
 
-    async def get_nba_games(self):
-        games = await self.fetch_odds("basketball_nba", "NBA", 500)
-        processed = []
-        for g in games:
-            report, _ = self.analyze_game(g)
-            g['report'] = report
-            processed.append(g)
-        return processed
+    except Exception as e:
+        logger.error(f"Erro IA: {e}")
+        await wait_msg.edit_text(f"❌ Erro ao processar. Tente manual.")
 
-    async def get_ufc_games(self):
-        games = await self.fetch_odds("mma_mixed_martial_arts", "UFC/MMA", 500)
-        return games
+# ================= MENU PRINCIPAL =================
+@restricted
+async def start(update, context):
+    context.user_data.clear()
+    saldo_mes, in_mes, out_mes, saldo_total = calculate_balance()
+    
+    zoeiro = "🤡 ON" if db["config"]["zoeiro_mode"] else "🤖 OFF"
+    
+    kb = [
+        [InlineKeyboardButton("🗣️ Dica da IA", callback_data="ai_coach"), InlineKeyboardButton("🎲 Roleta", callback_data="roleta")],
+        [InlineKeyboardButton("🔍 Raio-X Mês", callback_data="full_report"), InlineKeyboardButton("📉 Evolução", callback_data="chart_evolution")],
+        [InlineKeyboardButton("💾 Backup", callback_data="backup"), InlineKeyboardButton(f"Zoeira: {zoeiro}", callback_data="toggle_mode")],
+        [InlineKeyboardButton("❌ Limpar Último", callback_data="del_last")]
+    ]
+    
+    txt = (f"🚀 **FINANCEIRO V18 ULTIMATE**\n\n"
+           f"📅 **Mês Atual:**\n🟢 R$ {in_mes:.2f} | 🔴 R$ {out_mes:.2f}\n"
+           f"⚖️ **Saldo Mês:** R$ {saldo_mes:.2f}\n"
+           f"💰 **Patrimônio Total:** R$ {saldo_total:.2f}\n\n"
+           f"💡 *Dica: Envie texto ('Gastei 10...') ou foto para registrar.*")
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    else:
+        await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-engine = SportsEngine()
-
-def gerar_texto_bilhete(palpites):
-    if not palpites: return ""
-    selected = []
-    total_odd = 1.0
+# ================= FUNCIONALIDADES EXTRAS =================
+async def roleta_russa(update, context):
     import random
-    random.shuffle(palpites)
-    
-    # Prioriza VIPs
-    palpites.sort(key=lambda x: 1 if "Real" in x['match'] or "City" in x['match'] or "Flamengo" in x['match'] or "Arsenal" in x['match'] else 0, reverse=True)
+    query = update.callback_query; await query.answer()
+    if random.random() > 0.5:
+        msg = "😈 **COMPRA!** Você merece, a vida é curta e o boleto é longo."
+    else:
+        msg = "😇 **NÃO COMPRA!** Vai sobrar mês no fim do dinheiro."
+    await query.message.reply_text(msg)
 
-    for p in palpites:
-        if total_odd > 20: break 
-        selected.append(p)
-        total_odd *= p['odd']
+async def chart_evolution(update, context):
+    query = update.callback_query; await query.answer()
+    
+    # Agrupar por mês (últimos 6 meses)
+    data_map = {}
+    today = datetime.now()
+    for i in range(5, -1, -1):
+        d = today - relativedelta(months=i)
+        key = d.strftime("%m/%Y")
+        data_map[key] = 0
+
+    for t in db["transactions"]:
+        m = t['date'][:7] # MM/YYYY
+        if m in data_map and t['type'] == 'gasto':
+            data_map[m] += t['value']
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(list(data_map.keys()), list(data_map.values()), marker='o', color='r', linestyle='-')
+    plt.title("Evolução de Gastos (6 meses)")
+    plt.grid(True)
+    
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    plt.close()
+    
+    await query.message.reply_photo(photo=buf)
+
+async def backup_data(update, context):
+    query = update.callback_query; await query.answer()
+    with open(DB_FILE, 'rb') as f:
+        await query.message.reply_document(f, caption=f"💾 Backup {datetime.now()}")
+
+async def del_last(update, context):
+    query = update.callback_query; await query.answer()
+    if not db["transactions"]:
+        await query.message.reply_text("Nada para apagar.")
+        return
+    
+    t = db["transactions"].pop()
+    save_db(db)
+    await query.message.reply_text(f"🗑️ Apagado: {t['description']} (R$ {t['value']})")
+    await start(update, context)
+
+async def ai_coach(update, context):
+    query = update.callback_query; await query.answer()
+    saldo, t_in, t_out, total = calculate_balance()
+    
+    prompt = "Aja como um consultor financeiro."
+    if db["config"]["zoeiro_mode"]:
+        prompt += " Seja sarcástico, faça piadas sobre pobreza e gastos inúteis. Use gírias brasileiras."
+    else:
+        prompt += " Seja formal, direto e analítico."
+
+    # Resumo das maiores categorias
+    mes = datetime.now().strftime("%m/%Y")
+    gastos = [t for t in db["transactions"] if t['type'] == 'gasto' and mes in t['date']]
+    cats = {}
+    for g in gastos: cats[g['category']] = cats.get(g['category'], 0) + g['value']
+    top_cat = max(cats, key=cats.get) if cats else "Nada"
+    
+    prompt += f" Dados: Saldo Mês: {saldo}, Gastos: {t_out}, Maior gasto: {top_cat}. Dê uma dica curta."
+    
+    msg = await query.message.reply_text("🧠 Pensando...")
+    try:
+        resp = model_ai.generate_content(prompt)
+        await msg.edit_text(resp.text)
+    except:
+        await msg.edit_text("A IA tirou folga.")
+
+async def toggle_mode(update, context):
+    db["config"]["zoeiro_mode"] = not db["config"]["zoeiro_mode"]
+    save_db(db)
+    await start(update, context)
+
+async def full_report(update, context):
+    query = update.callback_query; await query.answer()
+    mes = datetime.now().strftime("%m/%Y")
+    trans = [t for t in db["transactions"] if mes in t['date'] and t['type'] == 'gasto']
+    cats = {}
+    for t in trans: cats[t['category']] = cats.get(t['category'], 0) + t['value']
+    
+    msg = f"🔍 **RAIO-X {mes}**\n"
+    sorted_cats = sorted(cats.items(), key=lambda x:x[1], reverse=True)
+    
+    for c, v in sorted_cats:
+        # Barra de progresso visual
+        bar = "▓" * int(v / 100)
+        msg += f"\n🔸 {c}: R$ {v:.2f}\n   {bar}"
         
-    if total_odd < 3.0: return ""
-    
-    txt = f"\n🎟️ **BILHETE LUNÁTICO (ODD {total_odd:.2f})** 🚀\n"
-    for s in selected: txt += f"🎯 {s['match']}: {s['pick']} (@{s['odd']})\n"
-    txt += "⚠️ *Alto Risco. Aposte com moderação.*\n"
-    return txt
+    await query.message.reply_text(msg, parse_mode="Markdown")
 
-async def enviar_com_botao(context, text, poll_data=None, bilhete_txt=""):
-    full_text = text + bilhete_txt
-    kb = [[InlineKeyboardButton("💸 Apostar Agora", url=AFFILIATE_LINK)]]
-    try: 
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=full_text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
-        if poll_data:
-            await asyncio.sleep(2)
-            await context.bot.send_poll(chat_id=CHANNEL_ID, question=f"Quem ganha: {poll_data['h']} x {poll_data['a']}?", options=[poll_data['h'], "Empate", poll_data['a']], is_anonymous=True)
-    except: pass
-
-async def reboot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Reiniciando...")
-    os.execl(sys.executable, sys.executable, *sys.argv)
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rep = await engine.test_all_connections()
-    await update.message.reply_text(rep, parse_mode=ParseMode.MARKDOWN)
-
-async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
-    games = await engine.get_soccer_grade()
-    if not games: return
-    
-    top_games = games[:7]
-    
-    msg = f"🔥 **DOSSIÊ V126 (TRANSPARENTE)** 🔥\n\n"
-    poll_data = None
-    
-    for i, g in enumerate(top_games):
-        is_main = (i == 0)
-        icon = "⭐ **JOGO DO DIA** ⭐\n" if is_main else ""
-        if g['is_vip']: icon = "💎 **SUPER VIP** 💎\n"
-        
-        if is_main: poll_data = {"h": g['home'], "a": g['away']}
-        
-        block = "\n".join(g['report'])
-        msg += f"{icon}🏆 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
-    
-    bilhete = gerar_texto_bilhete(engine.daily_accumulator)
-    await enviar_com_botao(context, msg, poll_data, bilhete)
-
-async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
-    games = await engine.get_nba_games()
-    if not games: return
-    msg = f"🏀 **NBA PRIME V126** 🏀\n\n"
-    for g in games[:3]:
-        block = "\n".join(g['report'])
-        msg += f"🏟 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
-    await enviar_com_botao(context, msg)
-
-async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
-    fights = await engine.get_ufc_games()
-    if not fights: return
-    msg = "🥊 **UFC FIGHT DAY (V126)** 🥊\n\n"
-    for f in fights[:6]:
-        msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
-    await enviar_com_botao(context, msg)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
-          [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")]]
-    await update.message.reply_text("🦁 **PAINEL V126 - TRANSPARENTE**\nMostrando Odds de tudo!", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
-
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer(); data = q.data
-    
-    if data == "test_api":
-        await q.edit_message_text("⏳ Check-up..."); rep = await engine.test_all_connections()
-        kb = [[InlineKeyboardButton("Voltar", callback_data="top_jogos")]]
-        await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN); return
-    
-    if data == "ufc_fights":
-        await q.edit_message_text("🥊 Buscando Lutas..."); fights = await engine.get_ufc_games()
-        if not fights: await q.message.reply_text("⚠️ Sem lutas."); return
-        msg = "🥊 **UFC MANUAL** 🥊\n\n"
-        for f in fights[:6]: msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
-        await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
-
-    if data == "nba_hoje":
-        await q.edit_message_text("🏀 Buscando NBA..."); games = await engine.get_nba_games()
-        if not games: await q.message.reply_text("⚠️ Sem jogos."); return
-        msg = f"🏀 **NBA MANUAL** 🏀\n\n"
-        for g in games[:3]:
-            blk = "\n".join(g['report']); msg += f"🏟 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
-        await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
-
-    if data == "top_jogos":
-        await q.edit_message_text("⚽ Buscando Elite (V126)..."); games = await engine.get_soccer_grade()
-        if not games: await q.message.reply_text("⚠️ Sem jogos Tier 1 com Odds."); return
-        msg = f"🔥 **GRADE MANUAL V126**\n\n"
-        poll_data = None
-        for i, g in enumerate(games[:7]):
-            is_main = (i == 0)
-            icon = "⭐ **JOGO DO DIA** ⭐\n" if is_main else ""
-            if g['is_vip']: icon = "💎 **SUPER VIP** 💎\n"
-            if is_main: poll_data = {"h": g['home'], "a": g['away']}
-            blk = "\n".join(g['report']); msg += f"{icon}🏆 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
-        
-        bilhete = gerar_texto_bilhete(engine.daily_accumulator)
-        await enviar_com_botao(context, msg, poll_data, bilhete)
-        await q.message.reply_text("✅ Postado!")
-
-def main():
-    if not BOT_TOKEN: return
-    threading.Thread(target=run_web_server, daemon=True).start()
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("reboot", reboot_command))
-    app.add_handler(CallbackQueryHandler(button))
-    if app.job_queue:
-        app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
-        app.job_queue.run_daily(daily_soccer_job, time=time(hour=12, minute=0, tzinfo=timezone.utc))
-        app.job_queue.run_daily(daily_nba_job, time=time(hour=21, minute=0, tzinfo=timezone.utc))
-        app.job_queue.run_daily(daily_ufc_job, time=time(hour=15, minute=0, tzinfo=timezone.utc), days=(4, 5))
-    app.run_polling()
-
+# ================= MAIN =================
 if __name__ == "__main__":
-    main()
+    if not TOKEN:
+        print("ERRO: TELEGRAM_TOKEN não configurado!")
+    else:
+        app = ApplicationBuilder().token(TOKEN).build()
+        
+        # Comandos
+        app.add_handler(CommandHandler("start", start))
+        
+        # Callbacks do Menu
+        app.add_handler(CallbackQueryHandler(ai_coach, pattern="^ai_coach$"))
+        app.add_handler(CallbackQueryHandler(roleta_russa, pattern="^roleta$"))
+        app.add_handler(CallbackQueryHandler(chart_evolution, pattern="^chart_evolution$"))
+        app.add_handler(CallbackQueryHandler(backup_data, pattern="^backup$"))
+        app.add_handler(CallbackQueryHandler(toggle_mode, pattern="^toggle_mode$"))
+        app.add_handler(CallbackQueryHandler(del_last, pattern="^del_last$"))
+        app.add_handler(CallbackQueryHandler(full_report, pattern="^full_report$"))
+        
+        # Handler Inteligente (Texto e Foto)
+        # Pega qualquer texto que NÃO seja comando, e qualquer foto
+        app.add_handler(MessageHandler(
+            (filters.TEXT & ~filters.COMMAND) | filters.PHOTO, 
+            restricted(process_smart_entry)
+        ))
+        
+        print(f"Bot V18 Ultimate iniciado! Monitorando ID(s): {ALLOWED_USERS}")
+        app.run_polling(drop_pending_updates=True)
