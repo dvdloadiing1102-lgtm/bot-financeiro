@@ -31,14 +31,15 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # ================= KEEP ALIVE (PARA O RENDER NÃO DERRUBAR) =================
+# Isso cria um site falso para enganar o Render e evitar o erro "Port scan timeout"
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot Financeiro está rodando!"
+    return "Bot Financeiro está rodando e saudável!"
 
 def run_http():
-    # Pega a porta do Render ou usa 8080 padrão
+    # Pega a porta que o Render exige ou usa 8080
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -259,7 +260,7 @@ async def undo_quick(update, context):
     if lid:
         db["transactions"] = [t for t in db["transactions"] if t['id'] != lid]
         save_db(db)
-        await query.edit_message_text("🗑️ Apagado!")
+        await query.edit_message_text("🗑️ Registro desfeito!")
     else:
         await query.edit_message_text("Nada para desfazer.")
 
@@ -305,94 +306,7 @@ async def back(update, context):
     if update.callback_query: await update.callback_query.answer()
     await start(update, context)
 
-# ================= RELATÓRIOS =================
-async def menu_reports(update, context):
-    if not update.callback_query:
-        msg = await update.message.reply_text("🔄")
-        update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup), 'message': msg})
-
-    query = update.callback_query; await query.answer()
-    kb = [[InlineKeyboardButton("📅 Mapa Calor", callback_data="rep_nospend"), InlineKeyboardButton("📉 Evolução", callback_data="rep_evo")],
-          [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📊 Excel", callback_data="rep_csv")],
-          [InlineKeyboardButton("🍕 Categorias", callback_data="rep_pie"), InlineKeyboardButton("🔙", callback_data="back")]]
-    await query.edit_message_text("📊 **Relatórios:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def rep_pie(update, context):
-    query = update.callback_query; await query.answer()
-    cats = {}
-    mes = get_now().strftime("%m/%Y")
-    for t in db["transactions"]:
-        if t['type']=='gasto' and mes in t['date']: cats[t['category']] = cats.get(t['category'], 0) + t['value']
-    
-    if not cats: await query.edit_message_text("Sem dados.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]])); return
-    
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=COLORS)
-    ax.legend(cats.keys(), loc="best")
-    ax.set_title(f"Gastos {mes}", color='white')
-    buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close()
-    await query.message.reply_photo(buf)
-
-async def rep_evo(update, context):
-    query = update.callback_query; await query.answer(); d, l = [], []
-    for i in range(5, -1, -1):
-        m = (get_now() - relativedelta(months=i)).strftime("%m/%Y")
-        d.append(sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])); l.append(m[:2])
-    plt.figure(figsize=(6, 4)); plt.plot(l, d, marker='o', color='#00ffcc'); plt.grid(alpha=0.3); plt.title("Evolução")
-    buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close()
-    await query.message.reply_photo(buf)
-
-async def rep_nospend(update, context):
-    query = update.callback_query; await query.answer(); m = get_now().strftime("%m/%Y")
-    dg = {int(t['date'][:2]) for t in db["transactions"] if t['type']=='gasto' and m in t['date']}
-    txt = f"📅 **Mapa ({m})**\n\n` D  S  T  Q  Q  S  S`\n"
-    for d in range(1, 32):
-        if d > get_now().day: break
-        txt += f"{'🔴' if d in dg else '🟢'}  "; 
-        if d%7==0: txt+="\n"
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
-
-async def rep_csv(update, context):
-    query = update.callback_query; await query.answer()
-    with open("extrato.csv", "w", newline='', encoding='utf-8-sig') as f:
-        w = csv.writer(f, delimiter=';'); w.writerow(["Data", "Tipo", "Valor", "Categoria", "Descricao"])
-        for t in db["transactions"]: w.writerow([t['date'], t['type'], str(t['value']).replace('.',','), t['category'], t['description']])
-    with open("extrato.csv", "rb") as f: await query.message.reply_document(f)
-async def rep_pdf(update, context):
-    query = update.callback_query; await query.answer()
-    c = canvas.Canvas("rel.pdf", pagesize=letter); c.drawString(100,750,f"Extrato V36"); c.save()
-    with open("rel.pdf", "rb") as f: await query.message.reply_document(f)
-
-# ================= MANUAL & EXTRAS =================
-async def reg_start(update, context):
-    if not update.callback_query: 
-        msg = await update.message.reply_text("🔄")
-        update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup)})
-    query = update.callback_query; await query.answer()
-    kb = [[InlineKeyboardButton("💸 Gasto", callback_data="reg_gasto"), InlineKeyboardButton("💰 Ganho", callback_data="reg_ganho")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return REG_TYPE
-async def reg_type(update, context):
-    query = update.callback_query; await query.answer(); 
-    if query.data == "start": return await start(update, context)
-    context.user_data["t"] = query.data.replace("reg_", "")
-    await query.edit_message_text("Valor:"); return REG_VALUE
-async def reg_val(update, context):
-    try: context.user_data["v"] = float(update.message.text.replace(',', '.'))
-    except: return REG_VALUE
-    cats = db["categories"][context.user_data["t"]]; kb = []
-    for i in range(0, len(cats), 2): kb.append([InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in cats[i:i+2]])
-    await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb)); return REG_CAT
-async def reg_cat(update, context):
-    context.user_data["c"] = update.callback_query.data.replace("sc_", "")
-    kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")], [InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
-    await update.callback_query.edit_message_text("Descrição:", reply_markup=InlineKeyboardMarkup(kb)); return REG_DESC
-async def reg_fin(update, context):
-    desc = update.message.text if update.message else "Manual"
-    if update.callback_query and update.callback_query.data == "skip_d": desc = context.user_data["c"]
-    db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":context.user_data["t"], "value":context.user_data["v"], "category":context.user_data["c"], "wallet":"Manual", "description":desc, "date":get_now().strftime("%d/%m/%Y %H:%M")})
-    save_db(db); update_level(); msg = update.message or update.callback_query.message
-    await msg.reply_text("✅ Salvo!"); return await start(update, context)
-
+# ================= MÓDULOS EXTRAS =================
 async def tg_panic(update, context): db["config"]["panic_mode"] = not db["config"]["panic_mode"]; save_db(db); await start(update, context)
 async def tg_travel(update, context): db["config"]["travel_mode"] = not db["config"]["travel_mode"]; save_db(db); await start(update, context)
 
@@ -451,6 +365,99 @@ async def dream_cmd(update, context):
 async def backup(update, context):
     with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
 
+# ================= RELATÓRIOS =================
+async def menu_reports(update, context):
+    if not update.callback_query: 
+        msg = await update.message.reply_text("🔄")
+        update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup), 'message': msg})
+
+    query = update.callback_query; await query.answer()
+    kb = [[InlineKeyboardButton("📅 Mapa Calor", callback_data="rep_nospend"), InlineKeyboardButton("📉 Evolução", callback_data="rep_evo")],
+          [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📊 Excel", callback_data="rep_csv")],
+          [InlineKeyboardButton("🍕 Categorias", callback_data="rep_pie"), InlineKeyboardButton("🔙", callback_data="back")]]
+    await query.edit_message_text("📊 **Relatórios:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def rep_pie(update, context):
+    query = update.callback_query; await query.answer()
+    cats = {}
+    mes = get_now().strftime("%m/%Y")
+    for t in db["transactions"]:
+        if t['type']=='gasto' and mes in t['date']: cats[t['category']] = cats.get(t['category'], 0) + t['value']
+    
+    if not cats: await query.edit_message_text("Sem dados.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]])); return
+    
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=COLORS)
+    ax.legend(cats.keys(), loc="best")
+    ax.set_title(f"Gastos {mes}", color='white')
+    buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close()
+    await query.message.reply_photo(buf)
+
+async def rep_evo(update, context):
+    query = update.callback_query; await query.answer(); d, l = [], []
+    for i in range(5, -1, -1):
+        m = (get_now() - relativedelta(months=i)).strftime("%m/%Y")
+        d.append(sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])); l.append(m[:2])
+    plt.figure(figsize=(6, 4)); plt.plot(l, d, marker='o', color='#00ffcc'); plt.grid(alpha=0.3); plt.title("Evolução")
+    buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close()
+    await query.message.reply_photo(buf)
+
+async def rep_nospend(update, context):
+    query = update.callback_query; await query.answer(); m = get_now().strftime("%m/%Y")
+    dg = {int(t['date'][:2]) for t in db["transactions"] if t['type']=='gasto' and m in t['date']}
+    txt = f"📅 **Mapa ({m})**\n\n` D  S  T  Q  Q  S  S`\n"
+    for d in range(1, 32):
+        if d > get_now().day: break
+        txt += f"{'🔴' if d in dg else '🟢'}  "; 
+        if d%7==0: txt+="\n"
+    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
+
+async def rep_csv(update, context):
+    query = update.callback_query; await query.answer()
+    with open("extrato.csv", "w", newline='', encoding='utf-8-sig') as f:
+        w = csv.writer(f, delimiter=';'); w.writerow(["Data", "Tipo", "Valor", "Categoria", "Descricao"])
+        for t in db["transactions"]: w.writerow([t['date'], t['type'], str(t['value']).replace('.',','), t['category'], t['description']])
+    with open("extrato.csv", "rb") as f: await query.message.reply_document(f)
+async def rep_pdf(update, context):
+    query = update.callback_query; await query.answer()
+    c = canvas.Canvas("rel.pdf", pagesize=letter); c.drawString(100,750,f"Extrato V36"); c.save()
+    with open("rel.pdf", "rb") as f: await query.message.reply_document(f)
+
+async def help_search(update, context): await update.callback_query.message.reply_text("🔎 `/buscar termo`")
+async def search_cmd(update, context):
+    t = " ".join(context.args).lower(); res = [x for x in db["transactions"] if t in x['description'].lower()]
+    await update.message.reply_text(f"🔎 Achei {len(res)} itens. Total: R$ {sum(r['value'] for r in res):.2f}")
+
+# ================= MANUAL & EXTRAS =================
+async def reg_start(update, context):
+    if not update.callback_query: 
+        msg = await update.message.reply_text("🔄")
+        update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup)})
+    query = update.callback_query; await query.answer()
+    kb = [[InlineKeyboardButton("💸 Gasto", callback_data="reg_gasto"), InlineKeyboardButton("💰 Ganho", callback_data="reg_ganho")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return REG_TYPE
+async def reg_type(update, context):
+    query = update.callback_query; await query.answer(); 
+    if query.data == "start": return await start(update, context)
+    context.user_data["t"] = query.data.replace("reg_", "")
+    await query.edit_message_text("Valor:"); return REG_VALUE
+async def reg_val(update, context):
+    try: context.user_data["v"] = float(update.message.text.replace(',', '.'))
+    except: return REG_VALUE
+    cats = db["categories"][context.user_data["t"]]; kb = []
+    for i in range(0, len(cats), 2): kb.append([InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in cats[i:i+2]])
+    await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb)); return REG_CAT
+async def reg_cat(update, context):
+    context.user_data["c"] = update.callback_query.data.replace("sc_", "")
+    kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")], [InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
+    await update.callback_query.edit_message_text("Descrição:", reply_markup=InlineKeyboardMarkup(kb)); return REG_DESC
+async def reg_fin(update, context):
+    desc = update.message.text if update.message else "Manual"
+    if update.callback_query and update.callback_query.data == "skip_d": desc = context.user_data["c"]
+    db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":context.user_data["t"], "value":context.user_data["v"], "category":context.user_data["c"], "wallet":"Manual", "description":desc, "date":get_now().strftime("%d/%m/%Y %H:%M")})
+    save_db(db); update_level(); msg = update.message or update.callback_query.message
+    await msg.reply_text("✅ Salvo!"); return await start(update, context)
+
 # ================= MAIN =================
 if __name__ == "__main__":
     start_keep_alive() # INICIA O FALSO SITE
@@ -458,6 +465,7 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("devo", debt_cmd)); app.add_handler(CommandHandler("receber", debt_cmd)); app.add_handler(CommandHandler("sonho", dream_cmd))
+    app.add_handler(CommandHandler("buscar", search_cmd))
     
     reg_h = ConversationHandler(entry_points=[CallbackQueryHandler(reg_start, pattern="^start_reg")], states={REG_TYPE:[CallbackQueryHandler(reg_type)], REG_VALUE:[MessageHandler(filters.TEXT, reg_val)], REG_CAT:[CallbackQueryHandler(reg_cat)], REG_DESC:[MessageHandler(filters.TEXT, reg_fin), CallbackQueryHandler(reg_fin, pattern="^skip_d")]}, fallbacks=[CallbackQueryHandler(back, pattern="^back")])
     cat_h = ConversationHandler(entry_points=[CallbackQueryHandler(c_add, pattern="^c_add")], states={CAT_ADD_TYPE:[CallbackQueryHandler(c_type)], CAT_ADD_NAME:[MessageHandler(filters.TEXT, c_save)]}, fallbacks=[CallbackQueryHandler(back, pattern="^back")])
@@ -466,7 +474,7 @@ if __name__ == "__main__":
     cbs = [("menu_reports", menu_reports), ("rep_nospend", rep_nospend), ("rep_evo", rep_evo), ("rep_pdf", rep_pdf), ("rep_csv", rep_csv), ("rep_pie", rep_pie),
            ("menu_debts", menu_debts), ("cl_d", cl_d), ("tg_panic", tg_panic), ("menu_persona", menu_persona), ("sp_", set_persona), ("add_d", add_debt_help),
            ("roleta", roleta), ("menu_cats", menu_cats), ("menu_shop", menu_shop), ("sl_c", sl_c), ("menu_subs", menu_subs), ("menu_dreams", menu_dreams), 
-           ("backup", backup), ("undo_quick", undo_quick), ("back", back), ("reg_gasto", reg_type), ("reg_ganho", reg_type), ("tg_travel", tg_travel), ("c_del", c_del), ("dc_", c_kill)]
+           ("backup", backup), ("undo_quick", undo_quick), ("back", back), ("reg_gasto", reg_type), ("reg_ganho", reg_type), ("tg_travel", tg_travel), ("c_del", c_del), ("dc_", c_kill), ("help_search", help_search)]
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO, restricted(smart_entry)))
