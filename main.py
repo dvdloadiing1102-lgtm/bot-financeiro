@@ -23,14 +23,13 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ALLOWED_USERS = [int(x) for x in os.getenv("ALLOWED_USERS", "").split(",") if x.strip().isdigit()]
-DB_FILE = "finance_v30_final.json"
+DB_FILE = "finance_v31_final.json"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ================= AJUSTE DE HORA (BRASIL) =================
 def get_now():
-    # Subtrai 3 horas para ajustar UTC para Brasília
     return datetime.utcnow() - timedelta(hours=3)
 
 # ================= IA SETUP =================
@@ -113,15 +112,13 @@ def check_budget(cat, val):
 # ================= IA (AUDIO/FOTO/TEXTO) =================
 @restricted
 async def smart_entry(update, context):
-    if not model_ai: await update.message.reply_text("IA Offline."); return
+    if not model_ai: await update.message.reply_text("IA Offline (Verifique requirements.txt)."); return
     msg = update.message
     
-    # Configs
     travel = db["config"]["travel_mode"]
     panic = db["config"]["panic_mode"]
     persona_key = db["config"]["persona"]
 
-    # Personas
     personas_prompt = {
         "julius": "Você é o Julius Rock. Pão-duro, rabugento, calcula preço em horas de trabalho.",
         "primo": "Você é o Primo Rico. Fale de mindset, aportes e cortar gastos.",
@@ -246,7 +243,7 @@ async def start(update, context):
         [InlineKeyboardButton("🎭 Persona", callback_data="menu_persona"), InlineKeyboardButton("💾 Backup", callback_data="backup")]
     ]
     
-    msg = (f"🏔️ **FINANCEIRO V30 (FINAL)**\n"
+    msg = (f"🏔️ **FINANCEIRO V31 (FINAL)**\n"
            f"👤 {lvl}\n\n"
            f"💰 Saldo: **R$ {saldo:.2f}**\n"
            f"📉 Gastos: R$ {gasto:.2f} ({diff})\n\n"
@@ -266,17 +263,27 @@ async def tg_panic(update, context):
 async def tg_travel(update, context):
     db["config"]["travel_mode"] = not db["config"]["travel_mode"]; save_db(db); await start(update, context)
 
+# --- DÍVIDAS (AQUI ESTAVA O ERRO DE NAMEERROR, AGORA CORRIGIDO) ---
 async def menu_debts(update, context):
     query = update.callback_query; await query.answer()
     debts = db["debts"]; txt = "**🤝 Dívidas:**\n\n" + ("".join([f"{'🔴' if d['type']=='owe' else '🟢'} {d['who']}: R$ {d['val']}\n" for d in debts]) if debts else "Nada.")
     kb = [[InlineKeyboardButton("🗑️ Limpar", callback_data="clear_debts")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await query.edit_message_text(txt + "\nUse `/devo Nome 50`", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
 async def debt_cmd(update, context):
     try:
         t = "owe" if "devo" in update.message.text else "receive"; w = context.args[0]; v = float(context.args[1].replace(',', '.'))
         db["debts"].append({"who": w, "val": v, "type": t}); save_db(db); await update.message.reply_text("✅ Salvo!")
-    except: pass
-async def clear_debts(update, context): db["debts"] = []; save_db(db); await menu_debts(update, context)
+    except: await update.message.reply_text("Use: `/devo Nome 50`")
+
+async def clear_debts(update, context):
+    db["debts"] = []; save_db(db); await menu_debts(update, context)
+
+async def add_debt_help(update, context): # Função que faltava
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("Para adicionar:\n`/devo Nome 50` (Eu devo)\n`/receber Nome 50` (Me devem)")
+
+# --- FIM DO BLOCO DÍVIDAS ---
 
 async def roleta(update, context):
     query = update.callback_query; await query.answer()
@@ -318,7 +325,7 @@ async def rep_csv(update, context):
     with open("extrato.csv", "rb") as f: await query.message.reply_document(f)
 async def rep_pdf(update, context):
     query = update.callback_query; await query.answer()
-    c = canvas.Canvas("rel.pdf", pagesize=letter); c.drawString(100,750,f"Extrato V30"); c.save()
+    c = canvas.Canvas("rel.pdf", pagesize=letter); c.drawString(100,750,f"Extrato V31"); c.save()
     with open("rel.pdf", "rb") as f: await query.message.reply_document(f)
 
 async def help_search(update, context): await update.callback_query.message.reply_text("🔎 `/buscar termo`")
@@ -413,7 +420,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("devo", debt_cmd)); app.add_handler(CommandHandler("receber", debt_cmd))
     app.add_handler(CommandHandler("buscar", search_cmd)); app.add_handler(CommandHandler("sonho", dream_cmd)); app.add_handler(CommandHandler("add", sl_add))
     
-    # Manual Register & Categories
+    # Handlers Manuais
     reg_h = ConversationHandler(entry_points=[CallbackQueryHandler(reg_start, pattern="^start_reg")], states={
         REG_TYPE:[CallbackQueryHandler(reg_type)], REG_VALUE:[MessageHandler(filters.TEXT, reg_val)], 
         REG_CAT:[CallbackQueryHandler(reg_cat)], REG_DESC:[MessageHandler(filters.TEXT, reg_fin), CallbackQueryHandler(reg_fin, pattern="^skip_d")]}, 
@@ -434,8 +441,8 @@ if __name__ == "__main__":
     
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
-    # IA Handler
+    # IA Handler (COM AUDIO)
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO, restricted(smart_entry)))
     
-    print("🏔️ V30 FINAL RODANDO!")
+    print("🏔️ V31 FINAL CORRIGIDA RODANDO!")
     app.run_polling(drop_pending_updates=True)
