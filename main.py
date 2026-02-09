@@ -67,14 +67,14 @@ try:
 except:
     ADMIN_ID = 0
 
-DB_FILE = "finance_v44_stable.json"
+DB_FILE = "finance_v45_extrato.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot V44 Rodando!"
+    return "Bot V45 (Com Extrato) Online!"
 
 def run_http():
     port_env = os.environ.get("PORT", "10000")
@@ -319,8 +319,6 @@ async def smart_entry(update, context):
             ext = ".ogg" if msg.voice else ".mp3"
             file_path = f"aud_{uuid.uuid4()}{ext}"
             await f.download_to_drive(file_path)
-            
-            # BLOCO QUE ESTAVA DANDO ERRO (AGORA CORRIGIDO)
             try:
                 up = genai.upload_file(file_path)
                 while up.state.name == "PROCESSING":
@@ -416,7 +414,7 @@ async def start(update, context):
     
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V44 (FULL)**\n{vip_msg}\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V45 (EXTRATO)**\n{vip_msg}\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -452,8 +450,34 @@ async def menu_reports(update, context):
         update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup), 'message': msg})
     query = update.callback_query
     await query.answer()
-    kb = [[InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend"), InlineKeyboardButton("📉 Evolução", callback_data="rep_evo")], [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("🔙", callback_data="back")]]
+    
+    # ADICIONADO O BOTÃO "📝 Extrato" AQUI EMBAIXO
+    kb = [
+        [InlineKeyboardButton("📝 Extrato", callback_data="rep_list")],
+        [InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend"), InlineKeyboardButton("📉 Evolução", callback_data="rep_evo")],
+        [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("🔙", callback_data="back")]
+    ]
     await query.edit_message_text("📊 **Relatórios:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+# --- FUNÇÃO NOVA DE EXTRATO (AQUI ESTÁ ELA) ---
+async def rep_list(update, context):
+    query = update.callback_query
+    await query.answer()
+    
+    trans = db["transactions"][-15:] # Pega os últimos 15
+    if not trans:
+        await query.edit_message_text("📭 Nenhum registro ainda.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]))
+        return
+    
+    txt = "📝 **Últimos Lançamentos:**\n\n"
+    for t in reversed(trans):
+        icon = "🔴" if t['type'] == 'gasto' else "🟢"
+        txt += f"{icon} **{t['date']}** | R$ {t['value']:.2f}\n"
+        txt += f"🏷️ {t['category']} - _{t['description']}_\n"
+        txt += "──────────────\n"
+    
+    kb = [[InlineKeyboardButton("🔙 Voltar", callback_data="menu_reports")]]
+    await query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def rep_nospend(update, context):
     query = update.callback_query
@@ -732,7 +756,7 @@ if __name__ == "__main__":
     app.add_handler(reg_h); app.add_handler(cat_h)
 
     cbs = [("admin_panel", admin_panel), ("gen_", gen_key), ("input_key", ask_key), 
-           ("menu_reports", menu_reports), ("rep_nospend", rep_nospend), ("rep_evo", rep_evo), ("rep_pdf", rep_pdf),
+           ("menu_reports", menu_reports), ("rep_nospend", rep_nospend), ("rep_evo", rep_evo), ("rep_pdf", rep_pdf), ("rep_list", rep_list),
            ("menu_debts", menu_debts), ("add_d", add_debt_help), ("cl_d", cl_d),
            ("menu_cats", menu_cats), ("c_del", c_del), ("dc_", c_kill),
            ("menu_shop", menu_shop), ("sl_c", sl_c),
@@ -745,5 +769,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO, restricted(smart_entry)))
-    print("💎 V44 FINAL STABLE RODANDO!")
+    print("💎 V45 FINAL RODANDO!")
     app.run_polling(drop_pending_updates=True)
