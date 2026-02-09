@@ -1,11 +1,3 @@
-Você tem toda razão. O erro aconteceu porque eu tentei "compactar" o código para ele não ficar gigante, colocando várias funções na mesma linha (ex: def x(): y; z;), mas o Python proíbe misturar isso com linhas indentadas logo abaixo.
-Peço desculpas por isso. Para garantir que NUNCA MAIS dê erro de indentação, eu expandi o código inteiro para o formato padrão (uma instrução por linha). Ficou maior, mas é à prova de falhas.
-Aqui está a V39 (VERSÃO FINAL EXPANDIDA E CORRIGIDA).
-📋 O que fazer:
- * Copie TUDO abaixo.
- * Apague TUDO que está no seu main.py no Render.
- * Cole o novo código.
-(O requirements.txt continua o mesmo, não precisa mexer nele).
 import os
 import sys
 import subprocess
@@ -67,25 +59,36 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 try:
-    ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0])
+    # Pega o primeiro ID da lista ou usa 0 se não tiver
+    users_env = os.getenv("ALLOWED_USERS", "0")
+    if "," in users_env:
+        ADMIN_ID = int(users_env.split(",")[0])
+    else:
+        ADMIN_ID = int(users_env)
 except:
     ADMIN_ID = 0
 
-DB_FILE = "finance_v39_final.json"
+DB_FILE = "finance_v40_clean.json"
 
 # ================= KEEP ALIVE (FALSO SITE) =================
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot Financeiro V39 Operante!"
+    return "Bot Financeiro V40 Operante!"
 
 def run_http():
-    port = int(os.environ.get("PORT", 10000))
+    # Pega a porta do Render (Obrigatório) ou usa 10000
+    port_env = os.environ.get("PORT", "10000")
+    try:
+        port = int(port_env)
+    except:
+        port = 10000
+        
     try:
         app.run(host='0.0.0.0', port=port)
-    except:
-        pass
+    except Exception as e:
+        print(f"Erro no Flask: {e}")
 
 def start_keep_alive():
     t = threading.Thread(target=run_http)
@@ -152,11 +155,18 @@ db = load_db()
 def is_vip(user_id):
     if user_id == ADMIN_ID:
         return True, "👑 ADMIN (DONO)"
-    if str(user_id) in db["vip_users"]:
-        validade = datetime.strptime(db["vip_users"][str(user_id)], "%Y-%m-%d")
-        if validade > get_now():
-            dias = (validade - get_now()).days
-            return True, f"✅ VIP Ativo ({dias} dias)"
+    
+    uid_str = str(user_id)
+    if uid_str in db["vip_users"]:
+        data_str = db["vip_users"][uid_str]
+        try:
+            validade = datetime.strptime(data_str, "%Y-%m-%d")
+            if validade > get_now():
+                dias = (validade - get_now()).days
+                return True, f"✅ VIP Ativo ({dias} dias)"
+        except:
+            pass
+            
     return False, "❌ Expirado/Sem Acesso"
 
 def restricted(func):
@@ -215,14 +225,25 @@ async def redeem_key(update, context):
     except:
         await update.message.reply_text("❌ Use: `/resgatar CHAVE`")
         return
+    
     kd = db["vip_keys"].get(key)
     if not kd or kd["used"]:
         await update.message.reply_text("❌ Chave inválida.")
         return
+    
     days = kd["days"]
     curr = db["vip_users"].get(uid)
-    base = datetime.strptime(curr, "%Y-%m-%d") if curr and datetime.strptime(curr, "%Y-%m-%d") > get_now() else get_now()
-    new_d = base + timedelta(days=days)
+    
+    base_date = get_now()
+    if curr:
+        try:
+            curr_date = datetime.strptime(curr, "%Y-%m-%d")
+            if curr_date > get_now():
+                base_date = curr_date
+        except:
+            pass
+            
+    new_d = base_date + timedelta(days=days)
     db["vip_users"][uid] = new_d.strftime("%Y-%m-%d")
     db["vip_keys"][key]["used"] = True
     save_db(db)
@@ -235,7 +256,11 @@ def update_level():
     xp = len(db["transactions"])
     titles = [(0,"Iniciante"),(20,"Aprendiz"),(50,"Analista"),(100,"Gerente"),(500,"Magnata")]
     curr = db["user_level"]["title"]
-    new_t = next((t for x,t in reversed(titles) if xp>=x), curr)
+    new_t = curr
+    for limit, title in titles:
+        if xp >= limit:
+            new_t = title
+    
     db["user_level"] = {"xp":xp, "title":new_t}
     return new_t != curr, new_t
 
@@ -263,6 +288,7 @@ async def smart_entry(update, context):
         await update.message.reply_text("⚠️ IA Offline.")
         return
     msg = update.message
+    
     if msg.text == "💸 Gasto":
         return await reg_start(update, context)
     if msg.text == "💰 Ganho": 
@@ -275,11 +301,14 @@ async def smart_entry(update, context):
 
     travel = db["config"]["travel_mode"]
     panic = db["config"]["panic_mode"]
-    role = {"julius":"Julius Rock", "primo":"Primo Rico", "mae":"Mãe", "zoeiro":"Zoeiro", "padrao":"Assistente"}.get(db["config"]["persona"], "Assistente")
+    role_map = {"julius":"Julius Rock", "primo":"Primo Rico", "mae":"Mãe", "zoeiro":"Zoeiro", "padrao":"Assistente"}
+    role = role_map.get(db["config"]["persona"], "Assistente")
 
-    if panic and msg.text and any(b in msg.text.lower() for b in ["lazer","cerveja","pizza"]):
-        await msg.reply_text("🛑 PÂNICO!")
-        return
+    if panic and msg.text:
+        bad_words = ["lazer","cerveja","pizza","bar","ifood","uber"]
+        if any(b in msg.text.lower() for b in bad_words):
+            await msg.reply_text("🛑 PÂNICO ATIVO!")
+            return
 
     wait = await msg.reply_text("🎤..." if (msg.voice or msg.audio) else "🧠...")
     try:
@@ -304,6 +333,7 @@ async def smart_entry(update, context):
                     time.sleep(1)
                 content.append(up)
             except:
+                if os.path.exists(file_path): os.remove(file_path)
                 await wait.edit_text("Erro upload.")
                 return
         else:
@@ -311,6 +341,7 @@ async def smart_entry(update, context):
             
         resp = model_ai.generate_content(content)
         txt = resp.text.strip().replace("```json", "").replace("```", "")
+        
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
         
@@ -323,31 +354,39 @@ async def smart_entry(update, context):
                     data = ast.literal_eval(txt[txt.find("{"):txt.rfind("}")+1])
                 except:
                     pass
+        
         if data:
             if data['type']=='gasto' and check_budget(data['category'], float(data['value'])) and panic:
                 await wait.edit_text("🛑 Teto!")
                 return
+            
             inst = data.get("installments", 1)
             val = float(data['value'])
+            
             for i in range(inst):
                 dt = get_now() + relativedelta(months=i)
                 desc = data['description']
                 if inst > 1:
                     desc += f" ({i+1}/{inst})"
+                
                 t = {"id":str(uuid.uuid4())[:8], "type":data['type'], "value":val/inst if inst>1 else val, "category":data['category'], "description":desc, "date":dt.strftime("%d/%m/%Y %H:%M")}
                 db["transactions"].append(t)
+            
             lv, ti = update_level()
             save_db(db)
             context.user_data["last_id"] = t["id"]
+            
             msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}"
             if inst>1:
                 msg_ok += f"\n📅 {inst}x"
             if data.get('comment'):
                 msg_ok += f"\n\n🗣️ {data['comment']}"
+            
             kb = [[InlineKeyboardButton("↩️ Desfazer", callback_data="undo_quick")]]
             await wait.edit_text(msg_ok, reply_markup=InlineKeyboardMarkup(kb))
         else:
             await wait.edit_text(txt)
+            
     except Exception as e:
         await wait.edit_text(f"⚠️ Erro: {e}")
 
@@ -375,11 +414,13 @@ async def start(update, context):
         [InlineKeyboardButton("🤝 Dívidas", callback_data="menu_debts"), InlineKeyboardButton("📊 Relatórios", callback_data="menu_reports")],
         [InlineKeyboardButton("⚙️ Configs", callback_data="menu_conf"), InlineKeyboardButton("💾 Backup", callback_data="backup")]
     ]
+    
     if uid == ADMIN_ID:
         kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
+        
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V39 (VIP)**\n{vip_msg}\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V40 (CLEAN)**\n{vip_msg}\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -610,6 +651,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO, restricted(smart_entry)))
-    print("💎 V39 AUTO-CORRETIVA RODANDO!")
+    print("💎 V40 CLEAN RODANDO!")
     app.run_polling(drop_pending_updates=True)
-
