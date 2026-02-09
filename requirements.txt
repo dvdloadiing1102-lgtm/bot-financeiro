@@ -1,5 +1,5 @@
 python-telegram-bot
 google-generativeai
 matplotlib
-python-dateutil
 reportlab
+python-dateutil
