@@ -9,15 +9,13 @@ import time
 import io
 import math
 import random
+import requests
 from datetime import datetime, timedelta
 
 # ================= AUTO-CORREÇÃO DE INSTALAÇÃO =================
 def install_package(package):
     try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
     except: pass
-
-try: import requests
-except ImportError: install_package("requests"); import requests
 
 try: from flask import Flask
 except ImportError: install_package("flask"); from flask import Flask
@@ -57,12 +55,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v49_fixed.json"
+DB_FILE = "finance_v51_restore.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V49 Online!"
+def home(): return "Bot V51 (Restore System) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -73,13 +71,13 @@ plt.style.use('dark_background')
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6', '#c4e17f']
 def get_now(): return datetime.utcnow() - timedelta(hours=3)
 
-# ================= COTAÇÃO REAL =================
+# ================= COTAÇÃO =================
 def get_market_data():
     try:
         r = requests.get("https://awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL", timeout=5)
         d = r.json()
-        return f"COTAÇÃO: Dólar R${d['USDBRL']['bid'][:4]} | Euro R${d['EURBRL']['bid'][:4]} | BTC R${d['BTCBRL']['bid']}"
-    except: return "COTAÇÃO: Indisponível."
+        return f"Dólar:{d['USDBRL']['bid'][:4]}|Euro:{d['EURBRL']['bid'][:4]}"
+    except: return "Mercado Offline"
 
 # ================= IA =================
 model_ai = None
@@ -183,8 +181,7 @@ async def redeem_key(update, context):
     db["vip_users"][uid] = new_d.strftime("%Y-%m-%d"); db["vip_keys"][key]["used"] = True; save_db(db)
     await update.message.reply_text(f"🎉 **VIP ATIVADO!** Vence: {new_d.strftime('%d/%m/%Y')}\nDigite /start", parse_mode="Markdown")
 
-# ================= UTILS (A CORREÇÃO DO ERRO ESTÁ AQUI) =================
-# Aqui eu declaro TODOS os estados para não dar NameError
+# ================= UTILS =================
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME) = range(6)
 
 def calc_stats():
@@ -206,6 +203,7 @@ async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
     msg = update.message
     
+    # ATALHOS
     if msg.text == "💸 Gasto": return await reg_start(update, context)
     if msg.text == "💰 Ganho": 
         update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.reply_text(x, reply_markup=reply_markup), 'data': 'reg_ganho'})
@@ -213,18 +211,38 @@ async def smart_entry(update, context):
     if msg.text == "📊 Relatórios": return await menu_reports_trigger(update, context)
     if msg.text == "👛 Saldo": return await start(update, context)
 
+    # RESTORE DO BACKUP (NOVO)
+    if msg.document:
+        if msg.document.file_name.endswith(".json"):
+            try:
+                f = await context.bot.get_file(msg.document.file_id)
+                await f.download_to_drive(DB_FILE)
+                # Recarrega o banco na memória
+                global db
+                with open(DB_FILE, "r") as f: db = json.load(f)
+                await msg.reply_text("✅ **BACKUP RESTAURADO COM SUCESSO!**\nTodos os seus dados estão de volta.", parse_mode="Markdown")
+                return
+            except Exception as e:
+                await msg.reply_text(f"❌ Erro ao restaurar: {e}")
+                return
+
     travel = db["config"]["travel_mode"]; panic = db["config"]["panic_mode"]
     role = {"julius":"Julius Rock", "primo":"Primo Rico", "mae":"Mãe", "zoeiro":"Zoeiro", "padrao":"Assistente"}.get(db["config"]["persona"], "Assistente")
 
-    if panic and msg.text:
-        if any(b in msg.text.lower() for b in ["lazer","cerveja","pizza","bar","ifood"]): await msg.reply_text("🛑 PÂNICO ATIVO!"); return
+    if panic and msg.text and any(b in msg.text.lower() for b in ["lazer","cerveja","pizza","bar","ifood"]):
+        await msg.reply_text("🛑 PÂNICO ATIVO!"); return
 
     wait = await msg.reply_text("🎤..." if (msg.voice or msg.audio) else "🧠...")
-    
-    mkt = get_market_data() # Pega cotação
+    mkt = get_market_data()
     
     try:
-        content = []; prompt = f"""Atue como {role}. DADOS DE MERCADO: {mkt}. Travel={travel}. 1. JSON: {{"type":"gasto/ganho","value":float,"category":"str","description":"str","installments":1,"comment":"str"}}. 2. Texto."""; content.append(prompt)
+        content = []; prompt = f"""
+        INSTRUÇÃO (OBEDEÇA): Você é {role}. CONTEXTO MERCADO: {mkt}. MODO VIAGEM: {'ATIVADO' if travel else 'OFF'}.
+        
+        REGRAS:
+        1. Se VIAGEM=ATIVADO e input for MOEDA ESTRANGEIRA (ex: "10 dolares"), CONVERTA PARA BRL (Reais) usando o contexto ANTES de criar o JSON. O JSON deve ter o valor em REAIS.
+        2. Schema: {{"type":"gasto/ganho","value":float_em_BRL,"category":"str","description":"str","installments":1,"comment":"str"}}
+        """; content.append(prompt)
         file_path = None
         
         if msg.photo:
@@ -270,7 +288,6 @@ async def smart_entry(update, context):
             kb = [[InlineKeyboardButton("↩️ Desfazer", callback_data="undo_quick")]]
             await wait.edit_text(msg_ok, reply_markup=InlineKeyboardMarkup(kb))
         else: await wait.edit_text(txt)
-            
     except Exception as e: await wait.edit_text(f"⚠️ Erro: {e}")
 
 async def undo_quick(update, context):
@@ -295,7 +312,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V49**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V51 (RESTORE)**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -310,15 +327,14 @@ async def back(update, context):
     if update.callback_query: await update.callback_query.answer()
     await start(update, context)
 
-# ================= EXTRAS =================
+# ================= CONFIGS & EXTRAS =================
 async def menu_conf(update, context):
     p = "🔴 ON" if db["config"]["panic_mode"] else "🟢 OFF"
     t = "✈️ ON" if db["config"]["travel_mode"] else "🏠 OFF"
     kb = [[InlineKeyboardButton(f"Pânico: {p}", callback_data="tg_panic"), InlineKeyboardButton(f"Viagem: {t}", callback_data="tg_travel")],
           [InlineKeyboardButton("🎭 Persona", callback_data="menu_persona"), InlineKeyboardButton("🔔 Assinaturas", callback_data="menu_subs")],
           [InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
-    if update.callback_query.message.text.startswith("⚙️"):
-        await update.callback_query.edit_message_text("⚙️ **Configurações:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    if update.callback_query.message.text.startswith("⚙️"): await update.callback_query.edit_message_text("⚙️ **Configurações:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     else: await update.callback_query.edit_message_text("⚙️ **Configurações:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def tg_panic(update, context): db["config"]["panic_mode"] = not db["config"]["panic_mode"]; save_db(db); await menu_conf(update, context)
@@ -344,9 +360,7 @@ async def rep_list(update, context):
     trans = db["transactions"][-15:]
     if not trans: await query.edit_message_text("📭 Vazio.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]])); return
     txt = "📝 **Últimos 15:**\n\n"
-    for t in reversed(trans):
-        icon = "🔴" if t['type'] == 'gasto' else "🟢"
-        txt += f"{icon} {t['date']} | R$ {t['value']:.2f}\n🏷️ {t['category']} - {t['description']}\n\n"
+    for t in reversed(trans): txt += f"{'🔴' if t['type']=='gasto' else '🟢'} {t['date']} | R$ {t['value']:.2f}\n🏷️ {t['category']} - {t['description']}\n\n"
     await query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
 async def rep_pie(update, context):
@@ -525,6 +539,6 @@ if __name__ == "__main__":
            ("sub_add", sub_add_help), ("sub_del", sub_del_menu), ("ds_", sub_delete)]
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
-    app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO, restricted(smart_entry)))
-    print("💎 V49 FINAL FIX RODANDO!")
+    app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
+    print("💎 V51 RESTORE SYSTEM RODANDO!")
     app.run_polling(drop_pending_updates=True)
