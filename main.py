@@ -12,12 +12,11 @@ import random
 import requests
 from datetime import datetime, timedelta
 
-# ================= AUTO-CORREÇÃO (PRIMEIRO DE TUDO) =================
+# ================= AUTO-CORREÇÃO =================
 def install_package(package):
     try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
     except: pass
 
-# Tenta importar as bibliotecas críticas. Se falhar, instala.
 try: from flask import Flask
 except ImportError: install_package("flask"); from flask import Flask
 
@@ -59,12 +58,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v55_final.json"
+DB_FILE = "finance_v56_agenda.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V55 (Scheduler Fix) Online!"
+def home(): return "Bot V56 (Agenda) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -128,7 +127,7 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SCHEDULER (ALARME CORRIGIDO) =================
+# ================= SCHEDULER =================
 async def check_reminders(context):
     now_str = get_now().strftime("%Y-%m-%d %H:%M")
     to_remove = []
@@ -223,7 +222,7 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= IA & FLUXO =================
+# ================= IA =================
 class MockQuery:
     def __init__(self, data, msg): self.data = data; self.message = msg
     async def answer(self, *args, **kwargs): pass
@@ -264,9 +263,9 @@ async def smart_entry(update, context):
         VIAGEM: {'ON' if travel else 'OFF'}.
 
         TAREFAS:
-        1. LEMBRETE: Se user pedir para lembrar algo, gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}. Calcule a data futura.
-        2. GASTO/GANHO: Se for finanças, gere JSON: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}. Se VIAGEM=ON, converta moeda estrangeira.
-        3. CONVERSA: Texto normal.
+        1. LEMBRETE: Se user pedir para lembrar algo, gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
+        2. GASTO/GANHO: Se for finanças, gere JSON: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}. Se VIAGEM=ON, converta moeda.
+        3. CONVERSA: Texto.
         """
         content.append(prompt)
         file_path = None
@@ -340,16 +339,17 @@ async def start(update, context):
     ind_travel = "✈️ VIAGEM" if db["config"]["travel_mode"] else ""
     st = f"{ind_panic} {ind_travel}".strip()
     
+    # ADICIONADO BOTÃO DE AGENDA AQUI
     kb_inline = [
         [InlineKeyboardButton("📂 Categorias", callback_data="menu_cats"), InlineKeyboardButton("🛒 Mercado", callback_data="menu_shop")],
         [InlineKeyboardButton("🧾 Contas", callback_data="menu_debts"), InlineKeyboardButton("📊 Relatórios", callback_data="menu_reports")],
-        [InlineKeyboardButton("🎲 Roleta", callback_data="roleta"), InlineKeyboardButton("🔮 Sonhos", callback_data="menu_dreams")],
+        [InlineKeyboardButton("🎲 Roleta", callback_data="roleta"), InlineKeyboardButton("⏰ Agenda", callback_data="menu_agenda")],
         [InlineKeyboardButton("⚙️ Configs", callback_data="menu_conf"), InlineKeyboardButton("💾 Backup", callback_data="backup")]
     ]
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V55**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V56**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -363,6 +363,39 @@ async def start(update, context):
 async def back(update, context): 
     if update.callback_query: await update.callback_query.answer()
     await start(update, context)
+
+# ================= AGENDA (NOVO V56) =================
+async def menu_agenda(update, context):
+    query = update.callback_query; await query.answer()
+    rems = db.get("reminders", [])
+    if not rems: await query.edit_message_text("📭 Sem lembretes.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]])); return
+    
+    txt = "⏰ **AGENDA DE LEMBRETES:**\n\n"
+    kb = []
+    
+    # Ordena por data
+    rems.sort(key=lambda x: x['time'])
+    
+    for i, r in enumerate(rems):
+        txt += f"📅 {r['time']} - {r['text']}\n"
+        kb.append([InlineKeyboardButton(f"🗑️ Apagar {r['time'].split(' ')[1]}", callback_data=f"del_agenda_{i}")])
+    
+    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
+    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def agenda_del(update, context):
+    query = update.callback_query
+    try:
+        idx = int(query.data.replace("del_agenda_", ""))
+        if 0 <= idx < len(db["reminders"]):
+            removed = db["reminders"].pop(idx)
+            save_db(db)
+            await query.answer(f"🗑️ Lembrete das {removed['time']} apagado!")
+            await menu_agenda(update, context)
+        else:
+            await query.answer("Erro ao apagar.")
+    except:
+        await query.answer("Erro.")
 
 # ================= CONFIGS & EXTRAS =================
 async def menu_conf(update, context):
@@ -594,9 +627,10 @@ if __name__ == "__main__":
            ("menu_persona", menu_persona), ("sp_", set_persona), 
            ("backup", backup), ("undo_quick", undo_quick), ("back", back), 
            ("roleta", roleta), ("menu_subs", menu_subs), ("menu_dreams", menu_dreams),
-           ("sub_add", sub_add_help), ("sub_del", sub_del_menu), ("ds_", sub_delete)]
+           ("sub_add", sub_add_help), ("sub_del", sub_del_menu), ("ds_", sub_delete),
+           ("menu_agenda", menu_agenda), ("del_agenda_", agenda_del)] # CALLBACKS DA AGENDA
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V55 FINAL FIX RODANDO!")
+    print("💎 V56 AGENDA FIX RODANDO!")
     app.run_polling(drop_pending_updates=True)
