@@ -12,7 +12,7 @@ import random
 import requests
 from datetime import datetime, timedelta
 
-# ================= AUTO-CORREÇÃO DE INSTALAÇÃO =================
+# ================= AUTO-CORREÇÃO =================
 def install_package(package):
     try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
     except: pass
@@ -55,12 +55,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v51_restore.json"
+DB_FILE = "finance_v52_fix.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V51 (Restore System) Online!"
+def home(): return "Bot V52 (Market Fix) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -71,13 +71,18 @@ plt.style.use('dark_background')
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6', '#c4e17f']
 def get_now(): return datetime.utcnow() - timedelta(hours=3)
 
-# ================= COTAÇÃO =================
+# ================= COTAÇÃO (CORRIGIDA) =================
 def get_market_data():
     try:
-        r = requests.get("https://awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL", timeout=5)
+        # Usa API confiável
+        r = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL", timeout=5)
         d = r.json()
-        return f"Dólar:{d['USDBRL']['bid'][:4]}|Euro:{d['EURBRL']['bid'][:4]}"
-    except: return "Mercado Offline"
+        usd = float(d['USDBRL']['bid'])
+        eur = float(d['EURBRL']['bid'])
+        return {"usd": usd, "eur": eur, "txt": f"Dólar: {usd:.2f} | Euro: {eur:.2f}"}
+    except Exception as e:
+        print(f"Erro API: {e}")
+        return {"usd": 5.80, "eur": 6.20, "txt": "API Offline (Usando ref: 5.80)"}
 
 # ================= IA =================
 model_ai = None
@@ -91,7 +96,7 @@ if GEMINI_KEY:
         try: model_ai = genai.GenerativeModel('gemini-pro')
         except: model_ai = None
 
-# ================= BANCO DE DADOS =================
+# ================= DB =================
 def load_db():
     default = {
         "transactions": [], 
@@ -120,39 +125,39 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SISTEMA VIP =================
+# ================= VIP =================
 def is_vip(user_id):
-    if user_id == ADMIN_ID: return True, "👑 ADMIN (DONO)"
+    if user_id == ADMIN_ID: return True, "👑 ADMIN"
     uid = str(user_id)
     if uid in db["vip_users"]:
         try:
             if datetime.strptime(db["vip_users"][uid], "%Y-%m-%d") > get_now():
                 dias = (datetime.strptime(db["vip_users"][uid], "%Y-%m-%d") - get_now()).days
-                return True, f"✅ VIP Ativo ({dias}d)"
+                return True, f"✅ VIP ({dias}d)"
         except: pass
-    return False, "❌ Sem Acesso"
+    return False, "❌ Bloqueado"
 
 def restricted(func):
     async def wrapped(update, context, *args, **kwargs):
         user_id = update.effective_user.id
         status, msg = is_vip(user_id)
         if not status:
-            kb = [[InlineKeyboardButton("🔑 Inserir Chave", callback_data="input_key")]]
-            await update.message.reply_text(f"🚫 **BLOQUEADO**\nCompre sua chave VIP com o dono.", reply_markup=InlineKeyboardMarkup(kb))
+            kb = [[InlineKeyboardButton("🔑 Chave", callback_data="input_key")]]
+            await update.message.reply_text(f"🚫 **BLOQUEADO**\nCompre sua chave VIP.", reply_markup=InlineKeyboardMarkup(kb))
             return
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# ================= ADMIN =================
+# ================= ADMIN & KEY =================
 async def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query; 
     if query: await query.answer()
     uc = len(db["vip_users"]); kc = len([k for k, v in db["vip_keys"].items() if not v['used']])
-    txt = f"👑 **PAINEL**\n👥 Clientes: {uc}\n🔑 Livres: {kc}"
+    txt = f"👑 **PAINEL**\n👥: {uc} | 🔑: {kc}"
     kb = [[InlineKeyboardButton("📅 30 Dias", callback_data="gen_30"), InlineKeyboardButton("📅 90 Dias", callback_data="gen_90")],
           [InlineKeyboardButton("📅 7 Dias", callback_data="gen_7"), InlineKeyboardButton("♾️ 1 Ano", callback_data="gen_365")],
-          [InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
+          [InlineKeyboardButton("🔙", callback_data="back")]]
     if query: await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     else: await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -162,24 +167,24 @@ async def gen_key(update, context):
     days = int(query.data.replace("gen_", ""))
     key = f"VIP-{uuid.uuid4().hex[:6].upper()}"
     db["vip_keys"][key] = {"days": days, "used": False}; save_db(db)
-    await query.message.reply_text(f"✅ **Chave:** `{key}` ({days} dias)", parse_mode="Markdown")
+    await query.message.reply_text(f"✅ `{key}` ({days}d)", parse_mode="Markdown")
     await admin_panel(update, context)
 
 async def ask_key(update, context):
     await update.callback_query.answer()
-    await update.callback_query.message.reply_text("✍️ Use: `/resgatar CODIGO`")
+    await update.callback_query.message.reply_text("Use: `/resgatar CODIGO`")
 
 async def redeem_key(update, context):
     uid = str(update.effective_user.id)
     try: key = context.args[0].strip()
-    except: await update.message.reply_text("❌ Use: `/resgatar CHAVE`"); return
+    except: await update.message.reply_text("❌ `/resgatar CHAVE`"); return
     kd = db["vip_keys"].get(key)
     if not kd or kd["used"]: await update.message.reply_text("❌ Inválido."); return
     curr = db["vip_users"].get(uid)
     base = datetime.strptime(curr, "%Y-%m-%d") if curr and datetime.strptime(curr, "%Y-%m-%d") > get_now() else get_now()
     new_d = base + timedelta(days=kd["days"])
     db["vip_users"][uid] = new_d.strftime("%Y-%m-%d"); db["vip_keys"][key]["used"] = True; save_db(db)
-    await update.message.reply_text(f"🎉 **VIP ATIVADO!** Vence: {new_d.strftime('%d/%m/%Y')}\nDigite /start", parse_mode="Markdown")
+    await update.message.reply_text(f"🎉 VIP até {new_d.strftime('%d/%m/%Y')}\n/start", parse_mode="Markdown")
 
 # ================= UTILS =================
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME) = range(6)
@@ -197,52 +202,56 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= IA =================
+# ================= IA (CORRIGIDA) =================
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
     msg = update.message
     
-    # ATALHOS
-    if msg.text == "💸 Gasto": return await reg_start(update, context)
-    if msg.text == "💰 Ganho": 
+    # === CORREÇÃO DOS BOTÕES DO TECLADO ===
+    txt = msg.text
+    if txt == "💸 Gasto": return await reg_start(update, context)
+    if txt == "💰 Ganho": 
+        # Truque para simular clique no botão de ganho
         update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.reply_text(x, reply_markup=reply_markup), 'data': 'reg_ganho'})
         return await reg_type(update, context)
-    if msg.text == "📊 Relatórios": return await menu_reports_trigger(update, context)
-    if msg.text == "👛 Saldo": return await start(update, context)
+    if txt == "📊 Relatórios": return await menu_reports_trigger(update, context)
+    if txt == "👛 Saldo": return await start(update, context)
 
-    # RESTORE DO BACKUP (NOVO)
-    if msg.document:
-        if msg.document.file_name.endswith(".json"):
-            try:
-                f = await context.bot.get_file(msg.document.file_id)
-                await f.download_to_drive(DB_FILE)
-                # Recarrega o banco na memória
-                global db
-                with open(DB_FILE, "r") as f: db = json.load(f)
-                await msg.reply_text("✅ **BACKUP RESTAURADO COM SUCESSO!**\nTodos os seus dados estão de volta.", parse_mode="Markdown")
-                return
-            except Exception as e:
-                await msg.reply_text(f"❌ Erro ao restaurar: {e}")
-                return
+    # RESTORE BACKUP
+    if msg.document and msg.document.file_name.endswith(".json"):
+        f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
+        global db; 
+        with open(DB_FILE, "r") as fl: db = json.load(fl)
+        await msg.reply_text("✅ Backup Restaurado!"); return
 
     travel = db["config"]["travel_mode"]; panic = db["config"]["panic_mode"]
     role = {"julius":"Julius Rock", "primo":"Primo Rico", "mae":"Mãe", "zoeiro":"Zoeiro", "padrao":"Assistente"}.get(db["config"]["persona"], "Assistente")
 
-    if panic and msg.text and any(b in msg.text.lower() for b in ["lazer","cerveja","pizza","bar","ifood"]):
+    if panic and txt and any(b in txt.lower() for b in ["lazer","cerveja","pizza","bar","ifood"]):
         await msg.reply_text("🛑 PÂNICO ATIVO!"); return
 
     wait = await msg.reply_text("🎤..." if (msg.voice or msg.audio) else "🧠...")
-    mkt = get_market_data()
+    
+    # === COTAÇÃO DE VERDADE ===
+    mkt_data = get_market_data() # Retorna dict com 'usd' float e 'txt' string
     
     try:
-        content = []; prompt = f"""
-        INSTRUÇÃO (OBEDEÇA): Você é {role}. CONTEXTO MERCADO: {mkt}. MODO VIAGEM: {'ATIVADO' if travel else 'OFF'}.
-        
-        REGRAS:
-        1. Se VIAGEM=ATIVADO e input for MOEDA ESTRANGEIRA (ex: "10 dolares"), CONVERTA PARA BRL (Reais) usando o contexto ANTES de criar o JSON. O JSON deve ter o valor em REAIS.
-        2. Schema: {{"type":"gasto/ganho","value":float_em_BRL,"category":"str","description":"str","installments":1,"comment":"str"}}
-        """; content.append(prompt)
+        content = []; 
+        # PROMPT REFORÇADO PARA NÃO USAR 5.0
+        prompt = f"""
+        INSTRUÇÃO DO SISTEMA:
+        Você é {role}. 
+        COTAÇÃO ATUAL OBRIGATÓRIA: Dólar = {mkt_data['usd']}, Euro = {mkt_data['eur']}.
+        MODO VIAGEM: {'ON' if travel else 'OFF'}.
+
+        SE VIAGEM FOR ON e o usuário falar valor em MOEDA ESTRANGEIRA (dólar, euro, usd), você DEVE converter para BRL usando a cotação acima.
+        NÃO USE 5.0. USE {mkt_data['usd']}.
+        O JSON final deve ter o valor em REAIS (BRL).
+
+        Schema: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}
+        """
+        content.append(prompt)
         file_path = None
         
         if msg.photo:
@@ -259,17 +268,17 @@ async def smart_entry(update, context):
             except: 
                 if os.path.exists(file_path): os.remove(file_path)
                 await wait.edit_text("Erro upload."); return
-        else: content.append(f"Input: {msg.text}")
+        else: content.append(f"Input: {txt}")
             
         resp = model_ai.generate_content(content)
-        txt = resp.text.strip().replace("```json", "").replace("```", "")
+        t = resp.text.strip().replace("```json", "").replace("```", "")
         if file_path and os.path.exists(file_path): os.remove(file_path)
         
         data = None
-        if "{" in txt:
-            try: data = json.loads(txt[txt.find("{"):txt.rfind("}")+1])
+        if "{" in t:
+            try: data = json.loads(t[t.find("{"):t.rfind("}")+1])
             except: 
-                try: data = ast.literal_eval(txt[txt.find("{"):txt.rfind("}")+1])
+                try: data = ast.literal_eval(t[t.find("{"):t.rfind("}")+1])
                 except: pass
         
         if data:
@@ -278,16 +287,20 @@ async def smart_entry(update, context):
             for i in range(inst):
                 dt = get_now() + relativedelta(months=i); desc = data['description']
                 if inst > 1: desc += f" ({i+1}/{inst})"
-                t = {"id":str(uuid.uuid4())[:8], "type":data['type'], "value":val/inst if inst>1 else val, "category":data['category'], "description":desc, "date":dt.strftime("%d/%m/%Y %H:%M")}
-                db["transactions"].append(t)
+                tr = {"id":str(uuid.uuid4())[:8], "type":data['type'], "value":val/inst if inst>1 else val, "category":data['category'], "description":desc, "date":dt.strftime("%d/%m/%Y %H:%M")}
+                db["transactions"].append(tr)
             
-            save_db(db); context.user_data["last_id"] = t["id"]
+            save_db(db); context.user_data["last_id"] = tr["id"]
+            
             msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}"
             if inst>1: msg_ok += f"\n📅 {inst}x"
             if data.get('comment'): msg_ok += f"\n\n🗣️ {data['comment']}"
+            if travel and "dolar" in txt.lower(): msg_ok += f"\n(Conv: USD {mkt_data['usd']:.2f})"
+            
             kb = [[InlineKeyboardButton("↩️ Desfazer", callback_data="undo_quick")]]
             await wait.edit_text(msg_ok, reply_markup=InlineKeyboardMarkup(kb))
-        else: await wait.edit_text(txt)
+        else: await wait.edit_text(t)
+            
     except Exception as e: await wait.edit_text(f"⚠️ Erro: {e}")
 
 async def undo_quick(update, context):
@@ -299,9 +312,9 @@ async def undo_quick(update, context):
 @restricted
 async def start(update, context):
     context.user_data.clear(); saldo, ganho, gasto = calc_stats(); uid = update.effective_user.id; vip_ok, vip_msg = is_vip(uid)
-    ind_panic = "🛑 PÂNICO ON" if db["config"]["panic_mode"] else ""
-    ind_travel = "✈️ VIAGEM ON" if db["config"]["travel_mode"] else ""
-    st = f"\n{ind_panic} {ind_travel}".strip()
+    ind_panic = "🛑 PÂNICO" if db["config"]["panic_mode"] else ""
+    ind_travel = "✈️ VIAGEM" if db["config"]["travel_mode"] else ""
+    st = f"{ind_panic} {ind_travel}".strip()
     
     kb_inline = [
         [InlineKeyboardButton("📂 Categorias", callback_data="menu_cats"), InlineKeyboardButton("🛒 Mercado", callback_data="menu_shop")],
@@ -312,7 +325,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V51 (RESTORE)**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V52**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -539,6 +552,6 @@ if __name__ == "__main__":
            ("sub_add", sub_add_help), ("sub_del", sub_del_menu), ("ds_", sub_delete)]
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
-    app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V51 RESTORE SYSTEM RODANDO!")
+    app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO, restricted(smart_entry)))
+    print("💎 V52 REAL FIX RODANDO!")
     app.run_polling(drop_pending_updates=True)
