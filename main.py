@@ -11,6 +11,7 @@ import math
 import random
 import requests
 from datetime import datetime, timedelta
+from apscheduler.schedulers.background import BackgroundScheduler # NOVO
 
 # ================= AUTO-CORREÇÃO =================
 def install_package(package):
@@ -19,6 +20,9 @@ def install_package(package):
 
 try: from flask import Flask
 except ImportError: install_package("flask"); from flask import Flask
+
+try: from apscheduler.schedulers.background import BackgroundScheduler
+except ImportError: install_package("apscheduler"); from apscheduler.schedulers.background import BackgroundScheduler
 
 try:
     import matplotlib
@@ -55,12 +59,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v53_final.json"
+DB_FILE = "finance_v54_secretary.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V53 (Final Stable) Online!"
+def home(): return "Bot V54 (Secretary) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -80,7 +84,7 @@ def get_market_data():
         eur = float(d['EURBRL']['bid'])
         return {"usd": usd, "eur": eur, "txt": f"Dólar: {usd:.2f} | Euro: {eur:.2f}"}
     except:
-        return {"usd": 5.80, "eur": 6.20, "txt": "API Offline (Ref: 5.80)"}
+        return {"usd": 5.80, "eur": 6.20, "txt": "API Offline"}
 
 # ================= IA =================
 model_ai = None
@@ -105,7 +109,8 @@ def load_db():
         "vip_users": {}, "vip_keys": {},
         "wallets": ["Nubank", "Itaú", "Dinheiro", "Inter", "VR/VA", "Crédito"],
         "budgets": {"Alimentação": 1000},
-        "shopping_list": [], "debts": [], "subscriptions": [],
+        "shopping_list": [], "debts": [], "subscriptions": [], 
+        "reminders": [], # NOVO: Lista de Lembretes
         "user_level": {"xp": 0, "title": "Iniciante 🌱"},
         "config": {"persona": "padrao", "panic_mode": False, "travel_mode": False}
     }
@@ -122,6 +127,29 @@ def save_db(data):
     with open(DB_FILE, "w") as f: json.dump(data, f, indent=2)
 
 db = load_db()
+
+# ================= SCHEDULER (O ALARME) =================
+# Esta função roda a cada 1 minuto para ver se tem lembrete
+async def check_reminders(context):
+    now_str = get_now().strftime("%Y-%m-%d %H:%M")
+    to_remove = []
+    
+    # Verifica lembretes
+    for i, rem in enumerate(db.get("reminders", [])):
+        # Formato esperado: YYYY-MM-DD HH:MM
+        if rem["time"] == now_str:
+            try:
+                # Manda mensagem pro usuário
+                await context.bot.send_message(chat_id=rem["chat_id"], text=f"⏰ **LEMBRETE!**\n\n📌 {rem['text']}", parse_mode="Markdown")
+                to_remove.append(i)
+            except:
+                pass # Erro se o usuário bloqueou o bot
+    
+    # Remove lembretes já enviados
+    if to_remove:
+        for index in sorted(to_remove, reverse=True):
+            del db["reminders"][index]
+        save_db(db)
 
 # ================= VIP =================
 def is_vip(user_id):
@@ -146,7 +174,7 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# ================= ADMIN =================
+# ================= ADMIN & KEY =================
 async def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query; 
@@ -184,7 +212,7 @@ async def redeem_key(update, context):
     db["vip_users"][uid] = new_d.strftime("%Y-%m-%d"); db["vip_keys"][key]["used"] = True; save_db(db)
     await update.message.reply_text(f"🎉 VIP até {new_d.strftime('%d/%m/%Y')}\n/start", parse_mode="Markdown")
 
-# ================= UTILS & STATES =================
+# ================= UTILS =================
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME) = range(6)
 
 def calc_stats():
@@ -200,8 +228,8 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= IA =================
-# Classe para simular clique no botão via texto
+# ================= IA (SECRETARIA V54) =================
+# Classe Mock
 class MockQuery:
     def __init__(self, data, msg): self.data = data; self.message = msg
     async def answer(self, *args, **kwargs): pass
@@ -213,18 +241,11 @@ async def smart_entry(update, context):
     msg = update.message
     txt = msg.text
     
-    # ATALHOS CORRIGIDOS V53
-    if txt == "💸 Gasto": 
-        # Força entrada no ConversationHandler via simulador
-        update.callback_query = MockQuery('reg_gasto', msg)
-        return await reg_type(update, context)
-    if txt == "💰 Ganho": 
-        update.callback_query = MockQuery('reg_ganho', msg)
-        return await reg_type(update, context)
+    if txt == "💸 Gasto": update.callback_query = MockQuery('reg_gasto', msg); return await reg_type(update, context)
+    if txt == "💰 Ganho": update.callback_query = MockQuery('reg_ganho', msg); return await reg_type(update, context)
     if txt == "📊 Relatórios": return await menu_reports_trigger(update, context)
     if txt == "👛 Saldo": return await start(update, context)
 
-    # RESTORE
     if msg.document and msg.document.file_name.endswith(".json"):
         f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
         global db; 
@@ -239,17 +260,27 @@ async def smart_entry(update, context):
 
     wait = await msg.reply_text("🎤..." if (msg.voice or msg.audio) else "🧠...")
     mkt = get_market_data()
+    now_user = get_now().strftime("%Y-%m-%d %H:%M") # Hora atual pro contexto da IA
     
     try:
         content = []; 
+        # PROMPT DE SECRETÁRIA + FINANCEIRO
         prompt = f"""
-        INSTRUÇÃO:
-        Você é {role}. 
+        SISTEMA: Você é {role} e também um ASSESSOR PESSOAL.
+        AGORA SÃO: {now_user} (Ano-Mês-Dia Hora:Minuto).
         COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}.
         VIAGEM: {'ON' if travel else 'OFF'}.
 
-        SE VIAGEM=ON e valor em moeda estrangeira, CONVERTA PARA BRL usando a cotação.
-        Schema: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}
+        TAREFAS (Prioridade):
+        1. Se for LEMBRETE/AGENDA (ex: "Me lembre reunião dia 10 as 14h", "Acordar em 20 min"):
+           Gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}
+           *Calcule a data futura com base no 'AGORA SÃO'. Se user diz 'amanhã', some 1 dia.*
+        
+        2. Se for GASTO/GANHO:
+           Gere JSON: {{"type":"gasto/ganho","value":float,"category":"str","description":"str","installments":1,"comment":"str"}}
+           *Converta moeda se VIAGEM=ON.*
+
+        3. Se for conversa, responda texto.
         """
         content.append(prompt)
         file_path = None
@@ -282,6 +313,19 @@ async def smart_entry(update, context):
                 except: pass
         
         if data:
+            # LÓGICA DO LEMBRETE
+            if data['type'] == 'lembrete':
+                if "reminders" not in db: db["reminders"] = []
+                db["reminders"].append({
+                    "text": data['text'],
+                    "time": data['time'],
+                    "chat_id": update.effective_chat.id
+                })
+                save_db(db)
+                await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}")
+                return
+
+            # LÓGICA FINANCEIRA
             if data['type']=='gasto' and check_budget(data['category'], float(data['value'])) and panic: await wait.edit_text("🛑 Teto!"); return
             inst = data.get("installments", 1); val = float(data['value'])
             for i in range(inst):
@@ -325,7 +369,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V53**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V54 (SECRETARY)**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -340,7 +384,7 @@ async def back(update, context):
     if update.callback_query: await update.callback_query.answer()
     await start(update, context)
 
-# ================= CONFIGS & EXTRAS =================
+# ================= EXTRAS =================
 async def menu_conf(update, context):
     p = "🔴 ON" if db["config"]["panic_mode"] else "🟢 OFF"
     t = "✈️ ON" if db["config"]["travel_mode"] else "🏠 OFF"
@@ -426,7 +470,6 @@ async def rep_nospend(update, context):
 
 # MANUAL
 async def reg_start(update, context): 
-    # Pode ser chamado via callback (botão inline) ou MockQuery (texto)
     if not update.callback_query: msg = await update.message.reply_text("🔄"); update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup)})
     query = update.callback_query
     if hasattr(query, 'answer'): await query.answer()
@@ -533,13 +576,16 @@ if __name__ == "__main__":
     start_keep_alive()
     app = ApplicationBuilder().token(TOKEN).build()
     
+    # Scheduler
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app]) # Checa lembretes a cada 1 min
+    scheduler.start()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("resgatar", redeem_key))
     app.add_handler(CommandHandler("devo", debt_cmd)); app.add_handler(CommandHandler("receber", debt_cmd))
     app.add_handler(CommandHandler("sonho", dream_cmd)); app.add_handler(CommandHandler("sub", sub_cmd))
     
-    # IMPORTANTE: REGISTRAR CALLBACKS DE 'reg_gasto' e 'reg_ganho' NO CONVERSATION HANDLER
-    # Isso corrige o erro de não funcionar via botão do teclado
     reg_h = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(reg_start, pattern="^start_reg"),
@@ -559,7 +605,6 @@ if __name__ == "__main__":
     
     app.add_handler(reg_h); app.add_handler(cat_h)
 
-    # REMOVI 'reg_gasto' E 'reg_ganho' DAQUI PARA NÃO DAR CONFLITO
     cbs = [("admin_panel", admin_panel), ("gen_", gen_key), ("input_key", ask_key), 
            ("menu_reports", menu_reports), ("rep_nospend", rep_nospend), ("rep_evo", rep_evo), ("rep_pdf", rep_pdf), ("rep_list", rep_list), ("rep_csv", rep_csv), ("rep_pie", rep_pie),
            ("menu_debts", menu_debts), ("add_d", add_debt_help), ("cl_d", cl_d),
@@ -573,5 +618,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V53 FINAL STABLE RODANDO!")
+    print("💎 V54 SECRETARY RODANDO!")
     app.run_polling(drop_pending_updates=True)
