@@ -11,13 +11,13 @@ import math
 import random
 import requests
 from datetime import datetime, timedelta
-from apscheduler.schedulers.background import BackgroundScheduler # NOVO
 
-# ================= AUTO-CORREÇÃO =================
+# ================= AUTO-CORREÇÃO (PRIMEIRO DE TUDO) =================
 def install_package(package):
     try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
     except: pass
 
+# Tenta importar as bibliotecas críticas. Se falhar, instala.
 try: from flask import Flask
 except ImportError: install_package("flask"); from flask import Flask
 
@@ -47,7 +47,7 @@ except ImportError:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
     from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, ConversationHandler, filters
 
-# ================= CONFIG =================
+# ================= CONFIGURAÇÃO =================
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -59,12 +59,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v54_secretary.json"
+DB_FILE = "finance_v55_final.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V54 (Secretary) Online!"
+def home(): return "Bot V55 (Scheduler Fix) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -84,7 +84,7 @@ def get_market_data():
         eur = float(d['EURBRL']['bid'])
         return {"usd": usd, "eur": eur, "txt": f"Dólar: {usd:.2f} | Euro: {eur:.2f}"}
     except:
-        return {"usd": 5.80, "eur": 6.20, "txt": "API Offline"}
+        return {"usd": 5.80, "eur": 6.20, "txt": "API Offline (Ref: 5.80)"}
 
 # ================= IA =================
 model_ai = None
@@ -110,7 +110,7 @@ def load_db():
         "wallets": ["Nubank", "Itaú", "Dinheiro", "Inter", "VR/VA", "Crédito"],
         "budgets": {"Alimentação": 1000},
         "shopping_list": [], "debts": [], "subscriptions": [], 
-        "reminders": [], # NOVO: Lista de Lembretes
+        "reminders": [],
         "user_level": {"xp": 0, "title": "Iniciante 🌱"},
         "config": {"persona": "padrao", "panic_mode": False, "travel_mode": False}
     }
@@ -128,28 +128,23 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SCHEDULER (O ALARME) =================
-# Esta função roda a cada 1 minuto para ver se tem lembrete
+# ================= SCHEDULER (ALARME CORRIGIDO) =================
 async def check_reminders(context):
     now_str = get_now().strftime("%Y-%m-%d %H:%M")
     to_remove = []
     
-    # Verifica lembretes
-    for i, rem in enumerate(db.get("reminders", [])):
-        # Formato esperado: YYYY-MM-DD HH:MM
-        if rem["time"] == now_str:
-            try:
-                # Manda mensagem pro usuário
-                await context.bot.send_message(chat_id=rem["chat_id"], text=f"⏰ **LEMBRETE!**\n\n📌 {rem['text']}", parse_mode="Markdown")
-                to_remove.append(i)
-            except:
-                pass # Erro se o usuário bloqueou o bot
-    
-    # Remove lembretes já enviados
-    if to_remove:
-        for index in sorted(to_remove, reverse=True):
-            del db["reminders"][index]
-        save_db(db)
+    if "reminders" in db and db["reminders"]:
+        for i, rem in enumerate(db["reminders"]):
+            if rem["time"] == now_str:
+                try:
+                    await context.bot.send_message(chat_id=rem["chat_id"], text=f"⏰ **LEMBRETE!**\n\n📌 {rem['text']}", parse_mode="Markdown")
+                    to_remove.append(i)
+                except: pass
+        
+        if to_remove:
+            for index in sorted(to_remove, reverse=True):
+                del db["reminders"][index]
+            save_db(db)
 
 # ================= VIP =================
 def is_vip(user_id):
@@ -174,7 +169,7 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# ================= ADMIN & KEY =================
+# ================= ADMIN =================
 async def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query; 
@@ -228,8 +223,7 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= IA (SECRETARIA V54) =================
-# Classe Mock
+# ================= IA & FLUXO =================
 class MockQuery:
     def __init__(self, data, msg): self.data = data; self.message = msg
     async def answer(self, *args, **kwargs): pass
@@ -260,27 +254,19 @@ async def smart_entry(update, context):
 
     wait = await msg.reply_text("🎤..." if (msg.voice or msg.audio) else "🧠...")
     mkt = get_market_data()
-    now_user = get_now().strftime("%Y-%m-%d %H:%M") # Hora atual pro contexto da IA
+    now_user = get_now().strftime("%Y-%m-%d %H:%M")
     
     try:
         content = []; 
-        # PROMPT DE SECRETÁRIA + FINANCEIRO
         prompt = f"""
-        SISTEMA: Você é {role} e também um ASSESSOR PESSOAL.
-        AGORA SÃO: {now_user} (Ano-Mês-Dia Hora:Minuto).
+        SISTEMA: Você é {role}. AGORA: {now_user}.
         COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}.
         VIAGEM: {'ON' if travel else 'OFF'}.
 
-        TAREFAS (Prioridade):
-        1. Se for LEMBRETE/AGENDA (ex: "Me lembre reunião dia 10 as 14h", "Acordar em 20 min"):
-           Gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}
-           *Calcule a data futura com base no 'AGORA SÃO'. Se user diz 'amanhã', some 1 dia.*
-        
-        2. Se for GASTO/GANHO:
-           Gere JSON: {{"type":"gasto/ganho","value":float,"category":"str","description":"str","installments":1,"comment":"str"}}
-           *Converta moeda se VIAGEM=ON.*
-
-        3. Se for conversa, responda texto.
+        TAREFAS:
+        1. LEMBRETE: Se user pedir para lembrar algo, gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}. Calcule a data futura.
+        2. GASTO/GANHO: Se for finanças, gere JSON: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}. Se VIAGEM=ON, converta moeda estrangeira.
+        3. CONVERSA: Texto normal.
         """
         content.append(prompt)
         file_path = None
@@ -313,19 +299,13 @@ async def smart_entry(update, context):
                 except: pass
         
         if data:
-            # LÓGICA DO LEMBRETE
-            if data['type'] == 'lembrete':
+            if data.get('type') == 'lembrete':
                 if "reminders" not in db: db["reminders"] = []
-                db["reminders"].append({
-                    "text": data['text'],
-                    "time": data['time'],
-                    "chat_id": update.effective_chat.id
-                })
+                db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id})
                 save_db(db)
                 await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}")
                 return
 
-            # LÓGICA FINANCEIRA
             if data['type']=='gasto' and check_budget(data['category'], float(data['value'])) and panic: await wait.edit_text("🛑 Teto!"); return
             inst = data.get("installments", 1); val = float(data['value'])
             for i in range(inst):
@@ -369,7 +349,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V54 (SECRETARY)**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V55**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -384,7 +364,7 @@ async def back(update, context):
     if update.callback_query: await update.callback_query.answer()
     await start(update, context)
 
-# ================= EXTRAS =================
+# ================= CONFIGS & EXTRAS =================
 async def menu_conf(update, context):
     p = "🔴 ON" if db["config"]["panic_mode"] else "🟢 OFF"
     t = "✈️ ON" if db["config"]["travel_mode"] else "🏠 OFF"
@@ -578,7 +558,7 @@ if __name__ == "__main__":
     
     # Scheduler
     scheduler = BackgroundScheduler()
-    scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app]) # Checa lembretes a cada 1 min
+    scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app])
     scheduler.start()
     
     app.add_handler(CommandHandler("start", start))
@@ -618,5 +598,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V54 SECRETARY RODANDO!")
+    print("💎 V55 FINAL FIX RODANDO!")
     app.run_polling(drop_pending_updates=True)
