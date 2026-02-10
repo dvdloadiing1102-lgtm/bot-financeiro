@@ -43,7 +43,7 @@ except ImportError:
     from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
     from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, ConversationHandler, filters
 
-# ================= CONFIGURAÇÃO =================
+# ================= CONFIG =================
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -55,12 +55,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v52_fix.json"
+DB_FILE = "finance_v53_final.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V52 (Market Fix) Online!"
+def home(): return "Bot V53 (Final Stable) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -71,18 +71,16 @@ plt.style.use('dark_background')
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6', '#c4e17f']
 def get_now(): return datetime.utcnow() - timedelta(hours=3)
 
-# ================= COTAÇÃO (CORRIGIDA) =================
+# ================= MARKET DATA =================
 def get_market_data():
     try:
-        # Usa API confiável
         r = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL", timeout=5)
         d = r.json()
         usd = float(d['USDBRL']['bid'])
         eur = float(d['EURBRL']['bid'])
         return {"usd": usd, "eur": eur, "txt": f"Dólar: {usd:.2f} | Euro: {eur:.2f}"}
-    except Exception as e:
-        print(f"Erro API: {e}")
-        return {"usd": 5.80, "eur": 6.20, "txt": "API Offline (Usando ref: 5.80)"}
+    except:
+        return {"usd": 5.80, "eur": 6.20, "txt": "API Offline (Ref: 5.80)"}
 
 # ================= IA =================
 model_ai = None
@@ -148,7 +146,7 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# ================= ADMIN & KEY =================
+# ================= ADMIN =================
 async def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query; 
@@ -186,7 +184,7 @@ async def redeem_key(update, context):
     db["vip_users"][uid] = new_d.strftime("%Y-%m-%d"); db["vip_keys"][key]["used"] = True; save_db(db)
     await update.message.reply_text(f"🎉 VIP até {new_d.strftime('%d/%m/%Y')}\n/start", parse_mode="Markdown")
 
-# ================= UTILS =================
+# ================= UTILS & STATES =================
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME) = range(6)
 
 def calc_stats():
@@ -202,23 +200,31 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= IA (CORRIGIDA) =================
+# ================= IA =================
+# Classe para simular clique no botão via texto
+class MockQuery:
+    def __init__(self, data, msg): self.data = data; self.message = msg
+    async def answer(self, *args, **kwargs): pass
+    async def edit_message_text(self, text, reply_markup=None, **kwargs): await self.message.reply_text(text, reply_markup=reply_markup)
+
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
     msg = update.message
-    
-    # === CORREÇÃO DOS BOTÕES DO TECLADO ===
     txt = msg.text
-    if txt == "💸 Gasto": return await reg_start(update, context)
+    
+    # ATALHOS CORRIGIDOS V53
+    if txt == "💸 Gasto": 
+        # Força entrada no ConversationHandler via simulador
+        update.callback_query = MockQuery('reg_gasto', msg)
+        return await reg_type(update, context)
     if txt == "💰 Ganho": 
-        # Truque para simular clique no botão de ganho
-        update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.reply_text(x, reply_markup=reply_markup), 'data': 'reg_ganho'})
+        update.callback_query = MockQuery('reg_ganho', msg)
         return await reg_type(update, context)
     if txt == "📊 Relatórios": return await menu_reports_trigger(update, context)
     if txt == "👛 Saldo": return await start(update, context)
 
-    # RESTORE BACKUP
+    # RESTORE
     if msg.document and msg.document.file_name.endswith(".json"):
         f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
         global db; 
@@ -232,23 +238,17 @@ async def smart_entry(update, context):
         await msg.reply_text("🛑 PÂNICO ATIVO!"); return
 
     wait = await msg.reply_text("🎤..." if (msg.voice or msg.audio) else "🧠...")
-    
-    # === COTAÇÃO DE VERDADE ===
-    mkt_data = get_market_data() # Retorna dict com 'usd' float e 'txt' string
+    mkt = get_market_data()
     
     try:
         content = []; 
-        # PROMPT REFORÇADO PARA NÃO USAR 5.0
         prompt = f"""
-        INSTRUÇÃO DO SISTEMA:
+        INSTRUÇÃO:
         Você é {role}. 
-        COTAÇÃO ATUAL OBRIGATÓRIA: Dólar = {mkt_data['usd']}, Euro = {mkt_data['eur']}.
-        MODO VIAGEM: {'ON' if travel else 'OFF'}.
+        COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}.
+        VIAGEM: {'ON' if travel else 'OFF'}.
 
-        SE VIAGEM FOR ON e o usuário falar valor em MOEDA ESTRANGEIRA (dólar, euro, usd), você DEVE converter para BRL usando a cotação acima.
-        NÃO USE 5.0. USE {mkt_data['usd']}.
-        O JSON final deve ter o valor em REAIS (BRL).
-
+        SE VIAGEM=ON e valor em moeda estrangeira, CONVERTA PARA BRL usando a cotação.
         Schema: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}
         """
         content.append(prompt)
@@ -295,7 +295,7 @@ async def smart_entry(update, context):
             msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}"
             if inst>1: msg_ok += f"\n📅 {inst}x"
             if data.get('comment'): msg_ok += f"\n\n🗣️ {data['comment']}"
-            if travel and "dolar" in txt.lower(): msg_ok += f"\n(Conv: USD {mkt_data['usd']:.2f})"
+            if travel and "dolar" in txt.lower(): msg_ok += f"\n(Conv: USD {mkt['usd']:.2f})"
             
             kb = [[InlineKeyboardButton("↩️ Desfazer", callback_data="undo_quick")]]
             await wait.edit_text(msg_ok, reply_markup=InlineKeyboardMarkup(kb))
@@ -325,7 +325,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V52**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V53**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -426,12 +426,15 @@ async def rep_nospend(update, context):
 
 # MANUAL
 async def reg_start(update, context): 
+    # Pode ser chamado via callback (botão inline) ou MockQuery (texto)
     if not update.callback_query: msg = await update.message.reply_text("🔄"); update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup)})
-    query = update.callback_query; await query.answer()
+    query = update.callback_query
+    if hasattr(query, 'answer'): await query.answer()
     kb = [[InlineKeyboardButton("💸 Gasto", callback_data="reg_gasto"), InlineKeyboardButton("💰 Ganho", callback_data="reg_ganho")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return REG_TYPE
 async def reg_type(update, context):
-    query = update.callback_query; await query.answer()
+    query = update.callback_query
+    if hasattr(query, 'answer'): await query.answer()
     if query.data == "start": return await start(update, context)
     context.user_data["t"] = query.data.replace("reg_", ""); await query.edit_message_text("Valor:"); return REG_VALUE
 async def reg_val(update, context): 
@@ -535,10 +538,28 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("devo", debt_cmd)); app.add_handler(CommandHandler("receber", debt_cmd))
     app.add_handler(CommandHandler("sonho", dream_cmd)); app.add_handler(CommandHandler("sub", sub_cmd))
     
-    reg_h = ConversationHandler(entry_points=[CallbackQueryHandler(reg_start, pattern="^start_reg")], states={REG_TYPE:[CallbackQueryHandler(reg_type)], REG_VALUE:[MessageHandler(filters.TEXT, reg_val)], REG_CAT:[CallbackQueryHandler(reg_cat)], REG_DESC:[MessageHandler(filters.TEXT, reg_fin), CallbackQueryHandler(reg_fin, pattern="^skip_d")]}, fallbacks=[CallbackQueryHandler(back, pattern="^back")])
+    # IMPORTANTE: REGISTRAR CALLBACKS DE 'reg_gasto' e 'reg_ganho' NO CONVERSATION HANDLER
+    # Isso corrige o erro de não funcionar via botão do teclado
+    reg_h = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(reg_start, pattern="^start_reg"),
+            CallbackQueryHandler(reg_type, pattern="^reg_gasto"),
+            CallbackQueryHandler(reg_type, pattern="^reg_ganho")
+        ],
+        states={
+            REG_TYPE:[CallbackQueryHandler(reg_type)], 
+            REG_VALUE:[MessageHandler(filters.TEXT, reg_val)], 
+            REG_CAT:[CallbackQueryHandler(reg_cat)], 
+            REG_DESC:[MessageHandler(filters.TEXT, reg_fin), CallbackQueryHandler(reg_fin, pattern="^skip_d")]
+        }, 
+        fallbacks=[CallbackQueryHandler(back, pattern="^back")]
+    )
+    
     cat_h = ConversationHandler(entry_points=[CallbackQueryHandler(c_add, pattern="^c_add")], states={CAT_ADD_TYPE:[CallbackQueryHandler(c_type)], CAT_ADD_NAME:[MessageHandler(filters.TEXT, c_save)]}, fallbacks=[CallbackQueryHandler(back, pattern="^back")])
+    
     app.add_handler(reg_h); app.add_handler(cat_h)
 
+    # REMOVI 'reg_gasto' E 'reg_ganho' DAQUI PARA NÃO DAR CONFLITO
     cbs = [("admin_panel", admin_panel), ("gen_", gen_key), ("input_key", ask_key), 
            ("menu_reports", menu_reports), ("rep_nospend", rep_nospend), ("rep_evo", rep_evo), ("rep_pdf", rep_pdf), ("rep_list", rep_list), ("rep_csv", rep_csv), ("rep_pie", rep_pie),
            ("menu_debts", menu_debts), ("add_d", add_debt_help), ("cl_d", cl_d),
@@ -547,11 +568,10 @@ if __name__ == "__main__":
            ("menu_conf", menu_conf), ("tg_panic", tg_panic), ("tg_travel", tg_travel), 
            ("menu_persona", menu_persona), ("sp_", set_persona), 
            ("backup", backup), ("undo_quick", undo_quick), ("back", back), 
-           ("reg_gasto", reg_type), ("reg_ganho", reg_type),
            ("roleta", roleta), ("menu_subs", menu_subs), ("menu_dreams", menu_dreams),
            ("sub_add", sub_add_help), ("sub_del", sub_del_menu), ("ds_", sub_delete)]
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
-    app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO, restricted(smart_entry)))
-    print("💎 V52 REAL FIX RODANDO!")
+    app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
+    print("💎 V53 FINAL STABLE RODANDO!")
     app.run_polling(drop_pending_updates=True)
