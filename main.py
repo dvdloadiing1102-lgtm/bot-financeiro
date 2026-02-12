@@ -48,7 +48,7 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v78_monolith.json"
+DB_FILE = "finance_v79_modern.json"
 
 # ESTADOS GLOBAIS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
@@ -56,7 +56,7 @@ DB_FILE = "finance_v78_monolith.json"
 # ================= 4. SERVIDOR WEB (KEEP ALIVE) =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V78 Online!"
+def home(): return "Bot V79 Modern Online!"
 
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -74,7 +74,7 @@ def get_now(): return datetime.utcnow() - timedelta(hours=3)
 
 def get_market_data():
     try:
-        r = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL", timeout=5)
+        r = requests.get("https://economia.awesomeapi.com.br/last/USD-BRL,EUR-BRL,BTC-BRL", timeout=5)
         d = r.json()
         return {"usd": float(d['USDBRL']['bid']), "eur": float(d['EURBRL']['bid'])}
     except: return {"usd": 5.80, "eur": 6.20}
@@ -106,11 +106,13 @@ def save_db(data):
 
 db = load_db()
 
-# IA SETUP
+# IA SETUP (ATUALIZADO PARA FLASH 1.5)
 model_ai = None
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    try: model_ai = genai.GenerativeModel('gemini-pro')
+    try: 
+        # Tenta usar o modelo mais moderno e rápido que suporta áudio nativo
+        model_ai = genai.GenerativeModel('gemini-1.5-flash')
     except: model_ai = None
 
 # SCHEDULER
@@ -163,7 +165,7 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= 6. FUNÇÕES DE FLUXO (DEFINIDAS ANTES DA MAIN) =================
+# ================= 6. FUNÇÕES DE FLUXO =================
 
 async def start(update, context):
     context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
@@ -182,7 +184,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V78**\n{msg_vip}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V79**\n{msg_vip}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -199,7 +201,7 @@ async def cancel_op(update, context):
     await update.message.reply_text("🚫 Cancelado.", reply_markup=ReplyKeyboardMarkup([["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]], resize_keyboard=True))
     return ConversationHandler.END
 
-# --- DÍVIDAS (DEFINIDO AQUI PARA EVITAR ERRO) ---
+# --- DÍVIDAS ---
 async def menu_debts(update, context):
     query = update.callback_query; await query.answer()
     debts = db.get("debts_v2", {})
@@ -411,7 +413,7 @@ async def tg_travel(update, context): db["config"]["travel_mode"] = not db["conf
 async def menu_shop(update, context):
     l = db["shopping_list"]; txt = "**🛒 Mercado:**\n" + ("_Vazio_" if not l else "\n".join([f"• {i}" for i in l]))
     kb = [[InlineKeyboardButton("🗑️ Limpar", callback_data="sl_c")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await update.callback_query.edit_message_text(txt + "\n\n🗣️ *Dica: Fale 'Adicionar leite na lista'*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def sl_c(update, context): db["shopping_list"] = []; save_db(db); await start(update, context)
 
 async def menu_persona(update, context):
@@ -487,7 +489,7 @@ async def menu_agenda(update, context):
 async def agenda_del(update, context):
     db["reminders"] = []; save_db(db); await update.callback_query.answer("Limpo!"); await start(update, context)
 
-# --- IA ---
+# --- IA HANDLER ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
@@ -510,7 +512,7 @@ async def smart_entry(update, context):
         1. CONSULTA: "quanto gastei", "saldo". JSON: {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo"}}.
         2. LEMBRETE: "lembrar". JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
         3. REGISTRO: JSON: {{"type":"gasto" ou "ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
-        4. MERCADO: "põe leite na lista". JSON: {{"type":"mercado", "item":"produto"}}.
+        4. MERCADO: "põe leite na lista" ou "comprar pão". JSON: {{"type":"mercado", "item":"produto"}}.
         5. CONVERSA: Texto."""
         content.append(prompt)
         
@@ -581,7 +583,7 @@ async def undo_quick(update, context):
 
 # ================= 7. MAIN (O CÉREBRO FINAL) =================
 def main():
-    print("🚀 Iniciando Bot V78...")
+    print("🚀 Iniciando Bot V79...")
     start_keep_alive()
     app = ApplicationBuilder().token(TOKEN).build()
     
