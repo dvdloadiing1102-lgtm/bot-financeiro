@@ -11,24 +11,15 @@ import math
 import random
 from datetime import datetime, timedelta
 
-# ================= 1. AUTO-INSTALAÇÃO & ATUALIZAÇÃO =================
+# ================= 1. AUTO-INSTALAÇÃO SEGURA =================
 def install(package):
     try:
         __import__(package)
     except ImportError:
-        print(f"📦 Instalando {package}...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-# Força atualização do Google Generative AI para suportar modelos novos
-try:
-    import google.generativeai as genai
-    # Tenta verificar versão ou forçar upgrade silencioso se der erro de modelo
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "google-generativeai"])
-
-# Lista de dependências críticas
-libs = ["flask", "apscheduler", "telegram", "matplotlib", "reportlab", "python-dateutil", "requests"]
-for lib in libs: install(lib)
+required = ["flask", "apscheduler", "telegram", "google.generativeai", "matplotlib", "reportlab", "python-dateutil", "requests"]
+for lib in required: install(lib)
 
 # ================= 2. IMPORTAÇÕES =================
 from flask import Flask
@@ -56,15 +47,15 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v80_universal.json"
+DB_FILE = "finance_v81_final.json"
 
 # ESTADOS GLOBAIS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
-# ================= 4. SERVIDOR WEB (KEEP ALIVE) =================
+# ================= 4. SERVIDOR WEB =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V80 Universal Online!"
+def home(): return "Bot V81 Online e Rodando!"
 
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -114,25 +105,12 @@ def save_db(data):
 
 db = load_db()
 
-# IA SETUP (SELETOR INTELIGENTE V80)
+# IA SETUP
 model_ai = None
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # Tenta modelos na ordem do mais novo para o mais antigo/estável
-    model_list = ['gemini-1.5-flash', 'gemini-1.0-pro', 'gemini-pro']
-    for m_name in model_list:
-        try:
-            test_model = genai.GenerativeModel(m_name)
-            # Teste rápido de conexão (gera um token simples)
-            # Se falhar aqui, vai pro except e tenta o próximo
-            model_ai = test_model
-            print(f"✅ Modelo IA Conectado: {m_name}")
-            break
-        except Exception as e:
-            print(f"⚠️ Falha ao carregar {m_name}, tentando próximo... ({e})")
-    
-    if not model_ai:
-        print("❌ Erro Crítico: Nenhum modelo de IA disponível.")
+    try: model_ai = genai.GenerativeModel('gemini-1.5-flash')
+    except: model_ai = None
 
 # SCHEDULER
 async def check_reminders(context):
@@ -184,7 +162,7 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= 6. FUNÇÕES DE FLUXO =================
+# ================= 6. FUNÇÕES OBRIGATÓRIAS (TOPO) =================
 
 async def start(update, context):
     context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
@@ -203,7 +181,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V80**\n{msg_vip}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V81**\n{msg_vip}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -219,6 +197,14 @@ async def back(update, context):
 async def cancel_op(update, context):
     await update.message.reply_text("🚫 Cancelado.", reply_markup=ReplyKeyboardMarkup([["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]], resize_keyboard=True))
     return ConversationHandler.END
+
+async def undo_quick(update, context):
+    query = update.callback_query; await query.answer()
+    if db["transactions"]: db["transactions"].pop(); save_db(db); await query.edit_message_text("🗑️ Desfeito!")
+    else: await query.edit_message_text("Nada para desfazer.")
+
+async def backup(update, context): 
+    with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
 
 # --- DÍVIDAS ---
 async def menu_debts(update, context):
@@ -439,8 +425,6 @@ async def menu_persona(update, context):
     kb = [[InlineKeyboardButton("Julius", callback_data="sp_julius"), InlineKeyboardButton("Zoeiro", callback_data="sp_zoeiro")], [InlineKeyboardButton("Padrão", callback_data="sp_padrao")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text("Persona:", reply_markup=InlineKeyboardMarkup(kb))
 async def set_persona(update, context): db["config"]["persona"] = update.callback_query.data.replace("sp_", ""); save_db(db); await menu_conf(update, context)
-async def backup(update, context): 
-    with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
 
 async def menu_subs(update, context):
     query = update.callback_query; await query.answer(); subs = db.get("subscriptions", [])
@@ -475,7 +459,7 @@ async def dream_cmd(update, context):
 
 async def menu_help(update, context):
     query = update.callback_query; await query.answer()
-    txt = """📚 **MANUAL** 🎓\n1. **Fale:** "Gastei 50 no mercado", "Ganhei 1000".\n2. **Pergunte:** "Quanto gastei com iFood?", "Qual saldo?".\n3. **Mercado:** "Adicionar leite na lista".\n4. **Agenda:** "Me lembre de pagar a luz dia 10".\n5. **Dívidas:** Use o menu 🧾 Dívidas para controlar quem te deve.\n6. **Apagar:** Use Relatórios -> Gerenciar."""
+    txt = """📚 **MANUAL** 🎓\n1. **Fale:** "Gastei 50 no mercado", "Ganhei 1000".\n2. **Pergunte:** "Quanto gastei com iFood?", "Qual saldo?".\n3. **Agenda:** "Me lembre de pagar a luz dia 10".\n4. **Dívidas:** Menu 🧾 Dívidas.\n5. **Apagar:** Relatórios -> Gerenciar."""
     kb = [[InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -599,7 +583,7 @@ async def smart_entry(update, context):
 
 # ================= 7. MAIN (O CÉREBRO FINAL) =================
 def main():
-    print("🚀 Iniciando Bot V80...")
+    print("🚀 Iniciando Bot V81...")
     start_keep_alive()
     app = ApplicationBuilder().token(TOKEN).build()
     
@@ -672,7 +656,7 @@ def main():
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
     
-    print("✅ Bot iniciado com sucesso!")
+    print("✅ SISTEMA INICIADO COM SUCESSO")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
