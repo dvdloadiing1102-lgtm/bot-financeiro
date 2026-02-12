@@ -58,12 +58,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v62_analyst.json"
+DB_FILE = "finance_v63_balance.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V62 (Analyst) Online!"
+def home(): return "Bot V63 (Balance Fix) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -165,11 +165,20 @@ def restricted(func):
 
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
+# === CORREÇÃO CRÍTICA AQUI (CALC_STATS) ===
 def calc_stats():
-    n = get_now(); m = n.strftime("%m/%Y")
-    gan = sum(t['value'] for t in db["transactions"] if t['type']=='ganho' and m in t['date'])
-    gas = sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])
-    return (gan-gas), gan, gas
+    n = get_now()
+    m = n.strftime("%m/%Y")
+    
+    # 1. Saldo ACUMULADO (Tudo o que entrou - Tudo o que saiu na história)
+    total_gains = sum(t['value'] for t in db["transactions"] if t['type']=='ganho')
+    total_expenses = sum(t['value'] for t in db["transactions"] if t['type']=='gasto')
+    saldo_atual = total_gains - total_expenses
+    
+    # 2. Gastos do MÊS (Apenas referência visual)
+    month_expenses = sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])
+    
+    return saldo_atual, month_expenses
 
 def check_budget(cat, val):
     lim = db["budgets"].get(cat, 0); m = get_now().strftime("%m/%Y")
@@ -216,7 +225,7 @@ async def redeem_key(update, context):
     db["vip_users"][uid] = new_d.strftime("%Y-%m-%d"); db["vip_keys"][key]["used"] = True; save_db(db)
     await update.message.reply_text(f"🎉 VIP até {new_d.strftime('%d/%m/%Y')}\n/start", parse_mode="Markdown")
 
-# ================= IA & FLUXO (CÉREBRO NOVO) =================
+# ================= IA & FLUXO =================
 class MockQuery:
     def __init__(self, data, msg): self.data = data; self.message = msg
     async def answer(self, *args, **kwargs): pass
@@ -228,13 +237,11 @@ async def smart_entry(update, context):
     msg = update.message
     txt = msg.text
     
-    # ATALHOS
     if txt == "💸 Gasto": update.callback_query = MockQuery('reg_gasto', msg); return await reg_type(update, context)
     if txt == "💰 Ganho": update.callback_query = MockQuery('reg_ganho', msg); return await reg_type(update, context)
     if txt == "📊 Relatórios": return await menu_reports_trigger(update, context)
     if txt == "👛 Saldo": return await start(update, context)
 
-    # RESTORE
     if msg.document and msg.document.file_name.endswith(".json"):
         f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
         global db; 
@@ -253,22 +260,16 @@ async def smart_entry(update, context):
     
     try:
         content = []; 
-        # PROMPT AVANÇADO COM "CONSULTA"
         prompt = f"""
         SISTEMA: Você é {role}. AGORA: {now_user}.
         COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}.
         VIAGEM: {'ON' if travel else 'OFF'}.
 
-        TAREFAS (Prioridade):
-        1. CONSULTA: Se user perguntar "quanto gastei no ifood", "quem me deve", "saldo do joão", gere JSON:
-           {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo_busca"}}.
-           *Use 'kind':'gastos' para compras e 'dividas' para pessoas.*
-
+        TAREFAS:
+        1. CONSULTA: Se user perguntar "quanto gastei no ifood", "quem deve", "saldo", gere JSON:
+           {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo"}}.
         2. LEMBRETE: Se pedir para lembrar, gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
-        
         3. GASTO/GANHO: Se for registro, gere JSON: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
-           *Se VIAGEM=ON, converta moeda.*
-
         4. CONVERSA: Texto.
         """
         content.append(prompt)
@@ -302,51 +303,26 @@ async def smart_entry(update, context):
                 except: pass
         
         if data:
-            # === NOVA FUNÇÃO: CONSULTA (ANALYST) ===
             if data.get('type') == 'consulta':
                 kind = data.get('kind')
                 term = data.get('term', '').lower()
-                
                 res_txt = ""
                 
                 if kind == 'gastos':
-                    # Busca nos gastos do mês atual
                     m = get_now().strftime("%m/%Y")
                     total = 0
-                    count = 0
                     for tr in db["transactions"]:
-                        if m in tr['date'] and tr['type'] == 'gasto':
-                            # Busca "fuzzy" simples
-                            if term in tr['category'].lower() or term in tr['description'].lower():
-                                total += tr['value']
-                                count += 1
-                    res_txt = f"🔍 **Análise ({term}):**\nVocê gastou **R$ {total:.2f}** em {count} compras neste mês."
+                        if m in tr['date'] and tr['type'] == 'gasto' and (term in tr['category'].lower() or term in tr['description'].lower()):
+                            total += tr['value']
+                    res_txt = f"🔍 **Gasto Mensal com '{term}':**\nR$ {total:.2f}"
                 
                 elif kind == 'dividas':
                     debts = db.get("debts_v2", {})
-                    if term == "geral" or term == "":
-                        # Lista todos que devem
-                        found = [f"{k}: R$ {v:.2f}" for k, v in debts.items() if v > 0]
-                        res_txt = "🧾 **Quem te deve:**\n" + ("\n".join(found) if found else "Ninguém.")
-                    else:
-                        # Busca pessoa específica
-                        found_val = 0
-                        found_name = ""
-                        for name, val in debts.items():
-                            if term in name.lower():
-                                found_val = val
-                                found_name = name
-                                break
-                        if found_name:
-                            status = "te deve" if found_val > 0 else "tem crédito de"
-                            res_txt = f"👤 **{found_name}** {status} R$ {abs(found_val):.2f}"
-                        else:
-                            res_txt = f"🤷‍♂️ Não achei ninguém com nome '{term}'."
+                    found = [f"{k}: R$ {v:.2f}" for k, v in debts.items() if term in k.lower() or term == ""]
+                    res_txt = "🧾 **Pessoas:**\n" + ("\n".join(found) if found else "Ninguém.")
+                
+                await wait.edit_text(res_txt, parse_mode="Markdown"); return
 
-                await wait.edit_text(res_txt, parse_mode="Markdown")
-                return
-
-            # === LEMBRETE ===
             if data.get('type') == 'lembrete':
                 if "reminders" not in db: db["reminders"] = []
                 db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id})
@@ -354,7 +330,6 @@ async def smart_entry(update, context):
                 await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}", parse_mode="Markdown")
                 return
 
-            # === FINANCEIRO ===
             if data['type']=='gasto' and check_budget(data['category'], float(data['value'])) and panic: await wait.edit_text("🛑 Teto!"); return
             inst = data.get("installments", 1); val = float(data['value'])
             for i in range(inst):
@@ -365,9 +340,11 @@ async def smart_entry(update, context):
             
             save_db(db); context.user_data["last_id"] = tr["id"]
             
-            msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}"
+            # Nova resposta com Saldo Atualizado
+            saldo_now, _ = calc_stats()
+            msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}\n\n💰 Saldo Atual: **R$ {saldo_now:.2f}**"
             if inst>1: msg_ok += f"\n📅 {inst}x"
-            if data.get('comment'): msg_ok += f"\n\n🗣️ {data['comment']}"
+            if data.get('comment'): msg_ok += f"\n🗣️ {data['comment']}"
             if travel and "dolar" in txt.lower(): msg_ok += f"\n(Conv: USD {mkt['usd']:.2f})"
             
             kb = [[InlineKeyboardButton("↩️ Desfazer", callback_data="undo_quick")]]
@@ -384,7 +361,7 @@ async def undo_quick(update, context):
 # ================= MENU =================
 @restricted
 async def start(update, context):
-    context.user_data.clear(); saldo, ganho, gasto = calc_stats(); uid = update.effective_user.id; vip_ok, vip_msg = is_vip(uid)
+    context.user_data.clear(); saldo_total, gastos_mes = calc_stats(); uid = update.effective_user.id; vip_ok, vip_msg = is_vip(uid)
     ind_panic = "🛑 PÂNICO" if db["config"]["panic_mode"] else ""
     ind_travel = "✈️ VIAGEM" if db["config"]["travel_mode"] else ""
     st = f"{ind_panic} {ind_travel}".strip()
@@ -398,7 +375,8 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V62**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    # MSG CORRIGIDA COM SALDO ACUMULADO E GASTO MENSAL
+    msg = f"💎 **FINANCEIRO V63**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo_total:.2f}**\n📉 Gastos (Mês): R$ {gastos_mes:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -574,7 +552,6 @@ async def rep_nospend(update, context):
         if d%7==0: txt+="\n"
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
-# MANUAL
 async def reg_start(update, context): 
     if not update.callback_query: msg = await update.message.reply_text("🔄"); update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup)})
     query = update.callback_query; 
@@ -722,5 +699,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V62 ANALYST RODANDO!")
+    print("💎 V63 BALANCE FIX RODANDO!")
     app.run_polling(drop_pending_updates=True)
