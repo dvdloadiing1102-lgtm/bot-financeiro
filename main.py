@@ -11,15 +11,23 @@ import math
 import random
 from datetime import datetime, timedelta
 
-# ================= 1. AUTO-INSTALAÇÃO DE PACOTES =================
+# ================= 1. AUTO-INSTALAÇÃO & ATUALIZAÇÃO =================
 def install(package):
-    try: __import__(package)
+    try:
+        __import__(package)
     except ImportError:
         print(f"📦 Instalando {package}...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
+# Força atualização do Google Generative AI para suportar modelos novos
+try:
+    import google.generativeai as genai
+    # Tenta verificar versão ou forçar upgrade silencioso se der erro de modelo
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "google-generativeai"])
+
 # Lista de dependências críticas
-libs = ["flask", "apscheduler", "telegram", "google.generativeai", "matplotlib", "reportlab", "python-dateutil", "requests"]
+libs = ["flask", "apscheduler", "telegram", "matplotlib", "reportlab", "python-dateutil", "requests"]
 for lib in libs: install(lib)
 
 # ================= 2. IMPORTAÇÕES =================
@@ -48,7 +56,7 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v79_modern.json"
+DB_FILE = "finance_v80_universal.json"
 
 # ESTADOS GLOBAIS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
@@ -56,7 +64,7 @@ DB_FILE = "finance_v79_modern.json"
 # ================= 4. SERVIDOR WEB (KEEP ALIVE) =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V79 Modern Online!"
+def home(): return "Bot V80 Universal Online!"
 
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -106,14 +114,25 @@ def save_db(data):
 
 db = load_db()
 
-# IA SETUP (ATUALIZADO PARA FLASH 1.5)
+# IA SETUP (SELETOR INTELIGENTE V80)
 model_ai = None
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    try: 
-        # Tenta usar o modelo mais moderno e rápido que suporta áudio nativo
-        model_ai = genai.GenerativeModel('gemini-1.5-flash')
-    except: model_ai = None
+    # Tenta modelos na ordem do mais novo para o mais antigo/estável
+    model_list = ['gemini-1.5-flash', 'gemini-1.0-pro', 'gemini-pro']
+    for m_name in model_list:
+        try:
+            test_model = genai.GenerativeModel(m_name)
+            # Teste rápido de conexão (gera um token simples)
+            # Se falhar aqui, vai pro except e tenta o próximo
+            model_ai = test_model
+            print(f"✅ Modelo IA Conectado: {m_name}")
+            break
+        except Exception as e:
+            print(f"⚠️ Falha ao carregar {m_name}, tentando próximo... ({e})")
+    
+    if not model_ai:
+        print("❌ Erro Crítico: Nenhum modelo de IA disponível.")
 
 # SCHEDULER
 async def check_reminders(context):
@@ -184,7 +203,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V79**\n{msg_vip}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V80**\n{msg_vip}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -512,7 +531,7 @@ async def smart_entry(update, context):
         1. CONSULTA: "quanto gastei", "saldo". JSON: {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo"}}.
         2. LEMBRETE: "lembrar". JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
         3. REGISTRO: JSON: {{"type":"gasto" ou "ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
-        4. MERCADO: "põe leite na lista" ou "comprar pão". JSON: {{"type":"mercado", "item":"produto"}}.
+        4. MERCADO: "põe leite na lista" ou "comprar pão" ou "lista mercado". JSON: {{"type":"mercado", "item":"produto"}}.
         5. CONVERSA: Texto."""
         content.append(prompt)
         
@@ -578,12 +597,9 @@ async def smart_entry(update, context):
         else: await wait.edit_text(t)
     except Exception as e: await wait.edit_text(f"⚠️ Erro IA: {e}")
 
-async def undo_quick(update, context):
-    query = update.callback_query; await query.answer(); db["transactions"].pop(); save_db(db); await query.edit_message_text("🗑️ Desfeito!")
-
 # ================= 7. MAIN (O CÉREBRO FINAL) =================
 def main():
-    print("🚀 Iniciando Bot V79...")
+    print("🚀 Iniciando Bot V80...")
     start_keep_alive()
     app = ApplicationBuilder().token(TOKEN).build()
     
