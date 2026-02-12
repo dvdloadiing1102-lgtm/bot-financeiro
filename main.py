@@ -10,7 +10,6 @@ import io
 import math
 import random
 import requests
-import traceback
 from datetime import datetime, timedelta
 
 # ================= AUTO-CORREÇÃO =================
@@ -59,20 +58,24 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v68_anticrash.json"
+DB_FILE = "finance_v69_resurrection.json"
+
+# ================= ESTADOS GLOBAIS (IMPORTANTE ESTAR AQUI EM CIMA) =================
+(REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V68 Anti-Crash Online!"
+def home(): return "Bot V69 Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
 def start_keep_alive(): threading.Thread(target=run_http, daemon=True).start()
 
-# ================= UTILS =================
+# ================= VISUAL & UTILS =================
 plt.style.use('dark_background')
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6', '#c4e17f']
+
 def get_now(): return datetime.utcnow() - timedelta(hours=3)
 
 def get_market_data():
@@ -102,9 +105,9 @@ def load_db():
             "ganho": ["Salário", "Extra", "Investimento"], 
             "gasto": ["Alimentação", "Transporte", "Lazer", "Mercado", "Casa", "Saúde", "Compras", "Assinaturas"]
         },
-        "vip_users": {}, "vip_keys": {}, "wallets": ["Nubank", "Itaú", "Dinheiro"],
-        "budgets": {"Alimentação": 1000}, "shopping_list": [], "subscriptions": [], 
-        "reminders": [], "debts_v2": {}, "user_level": {"xp": 0, "title": "Iniciante 🌱"},
+        "vip_users": {}, "vip_keys": {}, "budgets": {"Alimentação": 1000},
+        "shopping_list": [], "subscriptions": [], "reminders": [], "debts_v2": {}, 
+        "user_level": {"xp": 0, "title": "Iniciante 🌱"},
         "config": {"persona": "padrao", "panic_mode": False, "travel_mode": False}
     }
     if not os.path.exists(DB_FILE): return default
@@ -136,23 +139,14 @@ async def check_reminders(context):
             for index in sorted(to_remove, reverse=True): del db["reminders"][index]
             save_db(db)
 
-# ================= SAFETY & VIP =================
-# Handler de Erro Global (Impede o crash)
-async def error_handler(update, context):
-    logger.error(msg="Exception while handling an update:", exc_info=context.error)
-    try:
-        if update and update.effective_message:
-            await update.effective_message.reply_text("⚠️ **Ocorreu um erro interno ou a sessão expirou.**\nPor favor, digite /start para reiniciar o menu.")
-    except: pass
-
+# ================= SEGURANÇA & CÁLCULOS =================
 def is_vip(user_id):
     if user_id == ADMIN_ID: return True, "👑 ADMIN"
     uid = str(user_id)
     if uid in db["vip_users"]:
         try:
             if datetime.strptime(db["vip_users"][uid], "%Y-%m-%d") > get_now():
-                dias = (datetime.strptime(db["vip_users"][uid], "%Y-%m-%d") - get_now()).days
-                return True, f"✅ VIP ({dias}d)"
+                return True, f"✅ VIP"
         except: pass
     return False, "❌ Bloqueado"
 
@@ -161,30 +155,33 @@ def restricted(func):
         user_id = update.effective_user.id
         status, msg = is_vip(user_id)
         if not status:
-            kb = [[InlineKeyboardButton("🔑 Chave", callback_data="input_key")]]
-            await update.message.reply_text(f"🚫 **BLOQUEADO**\nCompre sua chave VIP.", reply_markup=InlineKeyboardMarkup(kb))
+            await update.message.reply_text(f"🚫 **BLOQUEADO**\nCompre sua chave VIP.")
             return
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-(REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
-
+# --- CÁLCULO DE SALDO CORRIGIDO (FORÇA MINÚSCULO) ---
 def calc_stats():
     n = get_now(); m = n.strftime("%m/%Y")
-    gan = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'ganho')
-    gas = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'gasto')
+    
+    # Normaliza: Converte tudo para minúsculo antes de somar
+    gan = sum(t['value'] for t in db["transactions"] if str(t['type']).lower() == 'ganho')
+    gas = sum(t['value'] for t in db["transactions"] if str(t['type']).lower() == 'gasto')
+    
     saldo = gan - gas
-    gas_mes = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'gasto' and m in t['date'])
+    gas_mes = sum(t['value'] for t in db["transactions"] if str(t['type']).lower() == 'gasto' and m in t['date'])
+    
     return saldo, gas_mes
 
 def check_budget(cat, val):
     lim = db["budgets"].get(cat, 0); m = get_now().strftime("%m/%Y")
     if lim == 0: return None
-    curr = sum(t['value'] for t in db["transactions"] if t['category']==cat and t['type'].lower()=='gasto' and m in t['date'])
+    curr = sum(t['value'] for t in db["transactions"] if t['category']==cat and str(t['type']).lower()=='gasto' and m in t['date'])
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= ADMIN =================
+# ================= FUNÇÕES DE MENUS (DEFINIDAS ANTES DO USO) =================
+
 async def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID: return
     query = update.callback_query; 
@@ -192,7 +189,6 @@ async def admin_panel(update, context):
     uc = len(db["vip_users"]); kc = len([k for k, v in db["vip_keys"].items() if not v['used']])
     txt = f"👑 **PAINEL**\n👥: {uc} | 🔑: {kc}"
     kb = [[InlineKeyboardButton("📅 30 Dias", callback_data="gen_30"), InlineKeyboardButton("📅 90 Dias", callback_data="gen_90")],
-          [InlineKeyboardButton("📅 7 Dias", callback_data="gen_7"), InlineKeyboardButton("♾️ 1 Ano", callback_data="gen_365")],
           [InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
     if query: await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     else: await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -222,340 +218,33 @@ async def redeem_key(update, context):
     db["vip_users"][uid] = new_d.strftime("%Y-%m-%d"); db["vip_keys"][key]["used"] = True; save_db(db)
     await update.message.reply_text(f"🎉 VIP até {new_d.strftime('%d/%m/%Y')}\n/start", parse_mode="Markdown")
 
-# ================= IA =================
-class MockQuery:
-    def __init__(self, data, msg): self.data = data; self.message = msg
-    async def answer(self, *args, **kwargs): pass
-    async def edit_message_text(self, text, reply_markup=None, **kwargs): await self.message.reply_text(text, reply_markup=reply_markup)
-
-@restricted
-async def smart_entry(update, context):
-    if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
-    msg = update.message
-    txt = msg.text
-    
-    if txt == "📊 Relatórios": return await menu_reports_trigger(update, context)
-    if txt == "👛 Saldo": return await start(update, context)
-
-    if msg.document and msg.document.file_name.endswith(".json"):
-        f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
-        global db; 
-        with open(DB_FILE, "r") as fl: db = json.load(fl)
-        await msg.reply_text("✅ Backup Restaurado!"); return
-
-    travel = db["config"]["travel_mode"]; panic = db["config"]["panic_mode"]
-    role = {"julius":"Julius Rock", "primo":"Primo Rico", "mae":"Mãe", "zoeiro":"Zoeiro", "padrao":"Assistente"}.get(db["config"]["persona"], "Assistente")
-
-    if panic and txt and any(b in txt.lower() for b in ["lazer","cerveja","pizza","bar","ifood"]):
-        await msg.reply_text("🛑 PÂNICO ATIVO!"); return
-
-    wait = await msg.reply_text("🎤..." if (msg.voice or msg.audio) else "🧠...")
-    mkt = get_market_data()
-    now_user = get_now().strftime("%Y-%m-%d %H:%M")
-    
-    try:
-        content = []; 
-        prompt = f"""
-        SISTEMA: Você é {role}. AGORA: {now_user}.
-        COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}.
-        VIAGEM: {'ON' if travel else 'OFF'}.
-
-        TAREFAS:
-        1. CONSULTA: "quanto gastei", "quem deve", "saldo". JSON: {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo"}}.
-        2. LEMBRETE: "lembrar". JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
-        3. REGISTRO: JSON: {{"type":"gasto" ou "ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
-           *Use 'gasto' ou 'ganho' MINÚSCULO. Se VIAGEM=ON, converta.*
-        4. CONVERSA: Texto.
-        """
-        content.append(prompt)
-        file_path = None
-        
-        if msg.photo:
-            f = await context.bot.get_file(msg.photo[-1].file_id); d = await f.download_as_bytearray()
-            content.append({"mime_type": "image/jpeg", "data": d})
-        elif msg.voice or msg.audio:
-            fid = (msg.voice or msg.audio).file_id; f = await context.bot.get_file(fid)
-            ext = ".ogg" if msg.voice else ".mp3"; file_path = f"aud_{uuid.uuid4()}{ext}"
-            await f.download_to_drive(file_path)
-            try:
-                up = genai.upload_file(file_path)
-                while up.state.name == "PROCESSING": time.sleep(1)
-                content.append(up)
-            except: 
-                if os.path.exists(file_path): os.remove(file_path)
-                await wait.edit_text("Erro upload."); return
-        else: content.append(f"Input: {txt}")
-            
-        resp = model_ai.generate_content(content)
-        t = resp.text.strip().replace("```json", "").replace("```", "")
-        if file_path and os.path.exists(file_path): os.remove(file_path)
-        
-        data = None
-        if "{" in t:
-            try: data = json.loads(t[t.find("{"):t.rfind("}")+1])
-            except: 
-                try: data = ast.literal_eval(t[t.find("{"):t.rfind("}")+1])
-                except: pass
-        
-        if data:
-            if 'type' in data: data['type'] = data['type'].lower()
-
-            if data.get('type') == 'consulta':
-                kind = data.get('kind'); term = data.get('term', '').lower(); res_txt = ""
-                if kind == 'gastos':
-                    m = get_now().strftime("%m/%Y"); total = 0
-                    for tr in db["transactions"]:
-                        if m in tr['date'] and tr['type'].lower() == 'gasto' and (term in tr['category'].lower() or term in tr['description'].lower()): total += tr['value']
-                    res_txt = f"🔍 **Gasto Mensal ({term}):** R$ {total:.2f}"
-                elif kind == 'dividas':
-                    debts = db.get("debts_v2", {})
-                    found = [f"{k}: R$ {v:.2f}" for k, v in debts.items() if term in k.lower()]
-                    res_txt = "🧾 **Pessoas:**\n" + ("\n".join(found) if found else "Ninguém.")
-                await wait.edit_text(res_txt, parse_mode="Markdown"); return
-
-            if data.get('type') == 'lembrete':
-                if "reminders" not in db: db["reminders"] = []
-                db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id}); save_db(db)
-                await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}", parse_mode="Markdown"); return
-
-            if data['type']=='gasto' and check_budget(data['category'], float(data['value'])) and panic: await wait.edit_text("🛑 Teto!"); return
-            inst = data.get("installments", 1); val = float(data['value'])
-            for i in range(inst):
-                dt = get_now() + relativedelta(months=i); desc = data['description']
-                if inst > 1: desc += f" ({i+1}/{inst})"
-                tr = {"id":str(uuid.uuid4())[:8], "type":data['type'], "value":val/inst if inst>1 else val, "category":data['category'], "description":desc, "date":dt.strftime("%d/%m/%Y %H:%M")}
-                db["transactions"].append(tr)
-            
-            save_db(db); context.user_data["last_id"] = tr["id"]
-            saldo_now, _ = calc_stats()
-            
-            msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}\n\n💰 Saldo Total: **R$ {saldo_now:.2f}**"
-            if inst>1: msg_ok += f"\n📅 {inst}x"
-            if data.get('comment'): msg_ok += f"\n🗣️ {data['comment']}"
-            if travel and "dolar" in str(txt).lower(): msg_ok += f"\n(Conv: USD {mkt['usd']:.2f})"
-            
-            kb = [[InlineKeyboardButton("↩️ Desfazer", callback_data="undo_quick")]]
-            await wait.edit_text(msg_ok, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-        else: await wait.edit_text(t)
-    except Exception as e: await wait.edit_text(f"⚠️ Erro: {e}")
-
-async def undo_quick(update, context):
-    query = update.callback_query; await query.answer(); lid = context.user_data.get("last_id")
-    if lid: db["transactions"] = [t for t in db["transactions"] if t['id'] != lid]; save_db(db); await query.edit_message_text("🗑️ Desfeito!")
-    else: await query.edit_message_text("Nada para desfazer.")
-
-# ================= MENU =================
-@restricted
-async def start(update, context):
-    context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id; vip_ok, vip_msg = is_vip(uid)
-    ind_panic = "🛑 PÂNICO" if db["config"]["panic_mode"] else ""
-    ind_travel = "✈️ VIAGEM" if db["config"]["travel_mode"] else ""
-    st = f"{ind_panic} {ind_travel}".strip()
-    
-    kb_inline = [
-        [InlineKeyboardButton("📂 Categorias", callback_data="menu_cats"), InlineKeyboardButton("🛒 Mercado", callback_data="menu_shop")],
-        [InlineKeyboardButton("🧾 Dívidas/Pessoas", callback_data="menu_debts"), InlineKeyboardButton("📊 Relatórios", callback_data="menu_reports")],
-        [InlineKeyboardButton("🎲 Roleta", callback_data="roleta"), InlineKeyboardButton("⏰ Agenda", callback_data="menu_agenda")],
-        [InlineKeyboardButton("⚙️ Configs", callback_data="menu_conf"), InlineKeyboardButton("📚 Manual de Uso", callback_data="menu_help")],
-        [InlineKeyboardButton("💾 Backup", callback_data="backup")]
-    ]
-    if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
-    kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
-    
-    msg = f"💎 **FINANCEIRO V68**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
-        try: m = await context.bot.send_message(chat_id=update.effective_chat.id, text="...", reply_markup=ReplyKeyboardMarkup(kb_reply, resize_keyboard=True)); await m.delete()
-        except: pass
-    else:
-        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(kb_reply, resize_keyboard=True), parse_mode="Markdown")
-        await update.message.reply_text("⚙️ **Menu:**", reply_markup=InlineKeyboardMarkup(kb_inline))
-    return ConversationHandler.END
-
-async def back(update, context): 
-    if update.callback_query: await update.callback_query.answer()
-    await start(update, context)
-
-# ================= MANUAL =================
-async def menu_help(update, context):
-    query = update.callback_query; await query.answer()
-    txt = """
-📚 **MANUAL DO USUÁRIO** 🎓
-
-🤖 **1. Inteligência Artificial (O Cérebro):**
-• **Fale Naturalmente:** "Gastei 50 no mercado", "Recebi 1000 de salário". O bot entende e registra.
-• **Pergunte:** "Quanto gastei com iFood?", "Qual meu saldo?", "Quem está me devendo?".
-• **Fotos:** Mande a foto de uma nota fiscal e ele lê o valor e o local sozinho!
-• **Áudio:** Pode mandar áudio falando seus gastos que ele entende.
-
-⏰ **2. Agenda e Lembretes:**
-• Fale: "Me lembre de pagar a luz dia 10 às 14h".
-• O bot vai te mandar uma mensagem na hora exata.
-• Veja seus compromissos no botão **⏰ Agenda**.
-
-🧾 **3. Dívidas e Pessoas:**
-• No menu **🧾 Dívidas**, cadastre pessoas (ex: "Esposa", "João").
-• Clique no nome delas para adicionar ("Emprestei") ou remover ("Pagou") valores.
-• O bot mantém o saldo de cada pessoa.
-
-✈️ **4. Modo Viagem:**
-• Em **⚙️ Configs**, ative o Modo Viagem.
-• Se você falar "Gastei 10 dólares", o bot converte automaticamente para Reais na cotação do dia.
-
-🗑️ **5. Errou? Como apagar:**
-• **Transações:** Vá em Relatórios -> Gerenciar/Excluir.
-• **Pessoas/Agenda:** Vá no menu delas e use o botão de lixeira.
-
-💡 *Dica: Use o botão "Backup" semanalmente para garantir seus dados!*
-    """
-    kb = [[InlineKeyboardButton("🔙 Voltar ao Menu", callback_data="back")]]
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-# ================= DÍVIDAS (COM PROTEÇÃO) =================
-async def menu_debts(update, context):
-    query = update.callback_query; await query.answer()
-    debts = db.get("debts_v2", {})
-    txt = "🧾 **CONTROLE DE PESSOAS**\n\n"
-    kb = []
-    if not debts: txt += "_Ninguém cadastrado._"
-    else:
-        for name, val in debts.items():
-            sinal = "🔴 Deve" if val > 0 else "🟢 Crédito"
-            txt += f"👤 **{name}**: {sinal} R$ {abs(val):.2f}\n"
-            kb.append([InlineKeyboardButton(f"✏️ {name}", callback_data=f"edit_debt_{name}")])
-    kb.append([InlineKeyboardButton("➕ Adicionar Pessoa", callback_data="add_person")])
-    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def add_person_start(update, context):
-    await update.callback_query.edit_message_text("Digite o nome da pessoa:")
-    return DEBT_NAME
-
-async def save_person_name(update, context):
-    name = update.message.text
-    if name not in db["debts_v2"]: db["debts_v2"][name] = 0.0; save_db(db); await update.message.reply_text(f"✅ {name} adicionado(a)!")
-    else: await update.message.reply_text("⚠️ Já existe.")
-    return await start(update, context)
-
-async def edit_debt_menu(update, context):
-    name = update.callback_query.data.replace("edit_debt_", "")
-    context.user_data["debt_name"] = name
-    val = db["debts_v2"].get(name, 0)
-    txt = f"👤 **{name}**\nSaldo atual: R$ {val:.2f}\n\nO que deseja fazer?"
-    kb = [[InlineKeyboardButton("➕ Emprestei (Aumentar)", callback_data="debt_add"), InlineKeyboardButton("➖ Pagou (Diminuir)", callback_data="debt_sub")],
-          [InlineKeyboardButton("🗑️ Excluir Pessoa", callback_data="debt_del"), InlineKeyboardButton("🔙 Voltar", callback_data="menu_debts")]]
-    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def debt_action(update, context):
-    try:
-        action = update.callback_query.data
-        
-        # Recuperação de falha: Se debt_name sumiu, volta pro menu
-        if "debt_name" not in context.user_data:
-            await update.callback_query.answer("⚠️ Sessão expirada. Selecione a pessoa novamente.")
-            return await menu_debts(update, context)
-
-        name = context.user_data["debt_name"]
-        
-        if action == "debt_del":
-            if name in db["debts_v2"]: del db["debts_v2"][name]; save_db(db)
-            await update.callback_query.answer("Apagado!"); return await menu_debts(update, context)
-        
-        context.user_data["debt_act"] = "add" if action == "debt_add" else "sub"
-        await update.callback_query.edit_message_text(f"Qual valor para {name}?")
-        return DEBT_VAL
-    except Exception as e:
-        logger.error(f"Erro debt_action: {e}")
-        return await start(update, context)
-
-async def debt_save_val(update, context):
-    try:
-        val = float(update.message.text.replace(',', '.'))
-        if "debt_name" not in context.user_data:
-            await update.message.reply_text("⚠️ Erro de sessão. Tente de novo.")
-            return await start(update, context)
-            
-        name = context.user_data["debt_name"]
-        if context.user_data["debt_act"] == "sub": val = -val
-        db["debts_v2"][name] += val; save_db(db)
-        await update.message.reply_text(f"✅ Atualizado! Novo saldo de {name}: R$ {db['debts_v2'][name]:.2f}")
-    except: await update.message.reply_text("❌ Valor inválido.")
-    return await start(update, context)
-
-# ================= AGENDA =================
-async def menu_agenda(update, context):
-    query = update.callback_query; await query.answer()
-    rems = db.get("reminders", [])
-    if not rems: await query.edit_message_text("📭 Sem lembretes.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]])); return
-    txt = "⏰ **AGENDA DE LEMBRETES:**\n\n"
-    kb = []; rems.sort(key=lambda x: x['time'])
-    for i, r in enumerate(rems):
-        txt += f"📅 {r['time']} - {r['text']}\n"
-        kb.append([InlineKeyboardButton(f"🗑️ Apagar {r['time'].split(' ')[1]}", callback_data=f"del_agenda_{i}")])
-    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def agenda_del(update, context):
-    query = update.callback_query
-    try:
-        idx = int(query.data.replace("del_agenda_", ""))
-        if 0 <= idx < len(db["reminders"]):
-            removed = db["reminders"].pop(idx); save_db(db)
-            await query.answer(f"🗑️ Lembrete apagado!"); await menu_agenda(update, context)
-        else: await query.answer("Erro.")
-    except: await query.answer("Erro.")
-
-# ================= RELATÓRIOS & GERENCIAMENTO =================
+# --- RELATÓRIOS ---
 async def menu_reports_trigger(update, context):
-    kb = [[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🗑️ Gerenciar/Excluir", callback_data="menu_manage_trans")],
-          [InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie"), InlineKeyboardButton("📊 CSV", callback_data="rep_csv")],
-          [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📉 Evolução", callback_data="rep_evo")],
+    kb = [[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🗑️ Gerenciar", callback_data="menu_manage_trans")],
+          [InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie"), InlineKeyboardButton("📄 PDF", callback_data="rep_pdf")],
           [InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend"), InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
     await update.message.reply_text("📊 **Relatórios Completos:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def menu_reports(update, context):
     query = update.callback_query; await query.answer()
-    kb = [[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🗑️ Gerenciar/Excluir", callback_data="menu_manage_trans")],
-          [InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie"), InlineKeyboardButton("📊 CSV", callback_data="rep_csv")],
-          [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📉 Evolução", callback_data="rep_evo")],
+    kb = [[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🗑️ Gerenciar", callback_data="menu_manage_trans")],
+          [InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie"), InlineKeyboardButton("📄 PDF", callback_data="rep_pdf")],
           [InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend"), InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
     await query.edit_message_text("📊 **Relatórios Completos:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def menu_manage_trans(update, context):
-    query = update.callback_query; await query.answer()
-    trans = db["transactions"][-5:]
-    if not trans: await query.edit_message_text("📭 Sem transações recentes.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]])); return
-    txt = "🗑️ **Excluir Transações Recentes:**\nClique para apagar permanentemente.\n\n"
-    kb = []
-    for t in reversed(trans):
-        icon = "🔴" if t['type'].lower() == 'gasto' else "🟢"
-        kb.append([InlineKeyboardButton(f"🗑️ {icon} R$ {t['value']:.2f} ({t['category']})", callback_data=f"del_tr_{t['id']}")])
-    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="menu_reports")])
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def delete_transaction_confirm(update, context):
-    query = update.callback_query
-    tid = query.data.replace("del_tr_", "")
-    original_len = len(db["transactions"])
-    db["transactions"] = [t for t in db["transactions"] if t['id'] != tid]
-    if len(db["transactions"]) < original_len:
-        save_db(db); await query.answer("🗑️ Transação apagada!"); await menu_manage_trans(update, context)
-    else: await query.answer("Erro: Não encontrada.")
 
 async def rep_list(update, context):
     query = update.callback_query; await query.answer()
     trans = db["transactions"][-15:]
     if not trans: await query.edit_message_text("📭 Vazio.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]])); return
     txt = "📝 **Últimos 15:**\n\n"
-    for t in reversed(trans): txt += f"{'🔴' if t['type'].lower()=='gasto' else '🟢'} {t['date']} | R$ {t['value']:.2f}\n🏷️ {t['category']} - {t['description']}\n\n"
+    for t in reversed(trans): txt += f"{'🔴' if str(t['type']).lower()=='gasto' else '🟢'} {t['date']} | R$ {t['value']:.2f}\n🏷️ {t['category']} - {t['description']}\n\n"
     await query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
 async def rep_pie(update, context):
     query = update.callback_query; await query.answer()
     cats = {}; m = get_now().strftime("%m/%Y")
     for t in db["transactions"]:
-        if t['type'].lower()=='gasto' and m in t['date']: cats[t['category']] = cats.get(t['category'], 0) + t['value']
+        if str(t['type']).lower()=='gasto' and m in t['date']: cats[t['category']] = cats.get(t['category'], 0) + t['value']
     if not cats: await query.edit_message_text("Sem dados.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]])); return
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=COLORS)
@@ -585,13 +274,13 @@ async def rep_csv(update, context):
 
 async def rep_evo(update, context):
     query = update.callback_query; await query.answer(); d, l = [], []
-    for i in range(5, -1, -1): m = (get_now() - relativedelta(months=i)).strftime("%m/%Y"); d.append(sum(t['value'] for t in db["transactions"] if t['type'].lower()=='gasto' and m in t['date'])); l.append(m[:2])
+    for i in range(5, -1, -1): m = (get_now() - relativedelta(months=i)).strftime("%m/%Y"); d.append(sum(t['value'] for t in db["transactions"] if str(t['type']).lower()=='gasto' and m in t['date'])); l.append(m[:2])
     plt.figure(figsize=(6, 4)); plt.plot(l, d, marker='o', color='#00ffcc'); plt.grid(alpha=0.3)
     buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close(); await query.message.reply_photo(buf)
 
 async def rep_nospend(update, context):
     query = update.callback_query; await query.answer(); m = get_now().strftime("%m/%Y")
-    dg = {int(t['date'][:2]) for t in db["transactions"] if t['type'].lower()=='gasto' and m in t['date']}
+    dg = {int(t['date'][:2]) for t in db["transactions"] if str(t['type']).lower()=='gasto' and m in t['date']}
     txt = f"📅 **Mapa ({m})**\n` D S T Q Q S S`\n"
     for d in range(1, 32): 
         if d > get_now().day: break 
@@ -599,62 +288,40 @@ async def rep_nospend(update, context):
         if d%7==0: txt+="\n"
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
-# ================= MANUAL & CATEGORIAS =================
-async def manual_gasto_trigger(update, context):
-    context.user_data["t"] = "gasto"
-    await update.message.reply_text("💸 **Novo Gasto**\nQual o valor? (Ex: 50.90)")
-    return REG_VALUE
-
-async def manual_ganho_trigger(update, context):
-    context.user_data["t"] = "ganho"
-    await update.message.reply_text("💰 **Novo Ganho**\nQual o valor? (Ex: 1500)")
-    return REG_VALUE
-
-async def reg_start(update, context):
+async def menu_manage_trans(update, context):
     query = update.callback_query; await query.answer()
-    kb = [[InlineKeyboardButton("💸 Gasto", callback_data="reg_gasto"), InlineKeyboardButton("💰 Ganho", callback_data="reg_ganho")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return REG_TYPE
+    trans = db["transactions"][-5:]
+    if not trans: await query.edit_message_text("📭 Sem transações recentes.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]])); return
+    txt = "🗑️ **Excluir Transações Recentes:**\n\n"
+    kb = []
+    for t in reversed(trans):
+        icon = "🔴" if str(t['type']).lower() == 'gasto' else "🟢"
+        kb.append([InlineKeyboardButton(f"🗑️ {icon} R$ {t['value']:.2f} ({t['category']})", callback_data=f"del_tr_{t['id']}")])
+    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="menu_reports")])
+    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-async def reg_type(update, context):
-    query = update.callback_query; await query.answer()
-    if query.data == "start": return await start(update, context)
-    context.user_data["t"] = query.data.replace("reg_", ""); await query.edit_message_text("Valor:"); return REG_VALUE
+async def delete_transaction_confirm(update, context):
+    query = update.callback_query
+    tid = query.data.replace("del_tr_", "")
+    original_len = len(db["transactions"])
+    db["transactions"] = [t for t in db["transactions"] if t['id'] != tid]
+    if len(db["transactions"]) < original_len:
+        save_db(db); await query.answer("🗑️ Transação apagada!"); await menu_manage_trans(update, context)
+    else: await query.answer("Erro: Não encontrada.")
 
-async def reg_val(update, context): 
-    try: context.user_data["v"] = float(update.message.text.replace(',', '.'))
-    except: return REG_VALUE
-    cats = db["categories"][context.user_data["t"]]; kb = []
-    for i in range(0, len(cats), 2): kb.append([InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in cats[i:i+2]])
-    await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb)); return REG_CAT
+# --- EXTRAS ---
+async def menu_conf(update, context):
+    p = "🔴 ON" if db["config"]["panic_mode"] else "🟢 OFF"
+    t = "✈️ ON" if db["config"]["travel_mode"] else "🏠 OFF"
+    kb = [[InlineKeyboardButton(f"Pânico: {p}", callback_data="tg_panic"), InlineKeyboardButton(f"Viagem: {t}", callback_data="tg_travel")],
+          [InlineKeyboardButton("🎭 Persona", callback_data="menu_persona"), InlineKeyboardButton("🔔 Assinaturas", callback_data="menu_subs")],
+          [InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
+    if update.callback_query and update.callback_query.message:
+        await update.callback_query.edit_message_text("⚙️ **Configurações:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-async def reg_cat(update, context): context.user_data["c"] = update.callback_query.data.replace("sc_", ""); kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")]]; await update.callback_query.edit_message_text("Descrição:", reply_markup=InlineKeyboardMarkup(kb)); return REG_DESC
+async def tg_panic(update, context): db["config"]["panic_mode"] = not db["config"]["panic_mode"]; save_db(db); await menu_conf(update, context)
+async def tg_travel(update, context): db["config"]["travel_mode"] = not db["config"]["travel_mode"]; save_db(db); await menu_conf(update, context)
 
-async def reg_fin(update, context):
-    desc = update.message.text if update.message else "Manual"; 
-    if update.callback_query and update.callback_query.data == "skip_d": desc = context.user_data["c"]
-    db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":context.user_data["t"], "value":context.user_data["v"], "category":context.user_data["c"], "description":desc, "date":get_now().strftime("%d/%m/%Y %H:%M")})
-    save_db(db); await (update.message or update.callback_query.message).reply_text("✅ Salvo!"); return await start(update, context)
-
-async def menu_cats(update, context):
-    query = update.callback_query; await query.answer()
-    kb = [[InlineKeyboardButton("➕ Criar", callback_data="c_add"), InlineKeyboardButton("❌ Excluir", callback_data="c_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await query.edit_message_text("Categorias:", reply_markup=InlineKeyboardMarkup(kb))
-async def c_add(update, context): query = update.callback_query; await query.answer(); kb = [[InlineKeyboardButton("Gasto", callback_data="nc_gasto"), InlineKeyboardButton("Ganho", callback_data="nc_ganho")]]; await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return CAT_ADD_TYPE
-async def c_type(update, context): context.user_data["nt"] = update.callback_query.data.replace("nc_", ""); await update.callback_query.edit_message_text("Nome:"); return CAT_ADD_NAME
-async def c_save(update, context):
-    t = context.user_data["nt"]; n = update.message.text
-    if n not in db["categories"][t]: db["categories"][t].append(n); save_db(db)
-    await update.message.reply_text("Criada!"); return await start(update, context)
-async def c_del(update, context):
-    kb = []; query = update.callback_query
-    for t in ["gasto","ganho"]: kb.append([InlineKeyboardButton(f"🗑️ {c}", callback_data=f"dc_{t}_{c}")])
-    kb.append([InlineKeyboardButton("🔙", callback_data="back")]); await update.callback_query.edit_message_text("Apagar:", reply_markup=InlineKeyboardMarkup(kb))
-async def c_kill(update, context):
-    _, t, n = update.callback_query.data.split("_"); 
-    if n in db["categories"][t]: db["categories"][t].remove(n); save_db(db)
-    await update.callback_query.edit_message_text("Apagada!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-
-# ================= EXTRAS =================
 async def menu_shop(update, context):
     l = db["shopping_list"]; txt = "**🛒 Mercado:**\n" + "\n".join(l)
     kb = [[InlineKeyboardButton("🗑️ Limpar", callback_data="sl_c")], [InlineKeyboardButton("🔙", callback_data="back")]]
@@ -703,15 +370,282 @@ async def dream_cmd(update, context):
     try: v = float(context.args[-1]); s,_,_ = calc_stats(); m = v/(s if s>0 else 100); await update.message.reply_text(f"🛌 Leva {m:.1f} meses.")
     except: pass
 
+async def menu_help(update, context):
+    query = update.callback_query; await query.answer()
+    txt = """📚 **MANUAL** 🎓
+1. **Fale:** "Gastei 50 no mercado", "Ganhei 1000".
+2. **Pergunte:** "Quanto gastei com iFood?", "Qual saldo?".
+3. **Agenda:** "Me lembre de pagar a luz dia 10".
+4. **Dívidas:** Use o menu 🧾 Dívidas para controlar quem te deve.
+5. **Apagar:** Use Relatórios -> Gerenciar."""
+    kb = [[InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
+    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+# --- MANUAL ENTRY ---
+async def manual_gasto_trigger(update, context):
+    context.user_data["t"] = "gasto"
+    await update.message.reply_text("💸 **Novo Gasto**\nQual o valor? (Ex: 50.90)")
+    return REG_VALUE
+
+async def manual_ganho_trigger(update, context):
+    context.user_data["t"] = "ganho"
+    await update.message.reply_text("💰 **Novo Ganho**\nQual o valor? (Ex: 1500)")
+    return REG_VALUE
+
+async def reg_start(update, context):
+    query = update.callback_query; await query.answer()
+    kb = [[InlineKeyboardButton("💸 Gasto", callback_data="reg_gasto"), InlineKeyboardButton("💰 Ganho", callback_data="reg_ganho")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return REG_TYPE
+
+async def reg_type(update, context):
+    query = update.callback_query; await query.answer()
+    if query.data == "start": return await start(update, context)
+    context.user_data["t"] = query.data.replace("reg_", ""); await query.edit_message_text("Valor:"); return REG_VALUE
+
+async def reg_val(update, context): 
+    try: context.user_data["v"] = float(update.message.text.replace(',', '.'))
+    except: return REG_VALUE
+    cats = db["categories"][context.user_data["t"]]; kb = []
+    for i in range(0, len(cats), 2): kb.append([InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in cats[i:i+2]])
+    await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb)); return REG_CAT
+
+async def reg_cat(update, context): context.user_data["c"] = update.callback_query.data.replace("sc_", ""); kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")]]; await update.callback_query.edit_message_text("Descrição:", reply_markup=InlineKeyboardMarkup(kb)); return REG_DESC
+
+async def reg_fin(update, context):
+    desc = update.message.text if update.message else "Manual"; 
+    if update.callback_query and update.callback_query.data == "skip_d": desc = context.user_data["c"]
+    db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":context.user_data["t"].lower(), "value":context.user_data["v"], "category":context.user_data["c"], "description":desc, "date":get_now().strftime("%d/%m/%Y %H:%M")})
+    save_db(db); await (update.message or update.callback_query.message).reply_text("✅ Salvo!"); return await start(update, context)
+
+# --- CATEGORIAS ---
+async def menu_cats(update, context):
+    query = update.callback_query; await query.answer()
+    kb = [[InlineKeyboardButton("➕ Criar", callback_data="c_add"), InlineKeyboardButton("❌ Excluir", callback_data="c_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    await query.edit_message_text("Categorias:", reply_markup=InlineKeyboardMarkup(kb))
+async def c_add(update, context): query = update.callback_query; await query.answer(); kb = [[InlineKeyboardButton("Gasto", callback_data="nc_gasto"), InlineKeyboardButton("Ganho", callback_data="nc_ganho")]]; await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return CAT_ADD_TYPE
+async def c_type(update, context): context.user_data["nt"] = update.callback_query.data.replace("nc_", ""); await update.callback_query.edit_message_text("Nome:"); return CAT_ADD_NAME
+async def c_save(update, context):
+    t = context.user_data["nt"]; n = update.message.text
+    if n not in db["categories"][t]: db["categories"][t].append(n); save_db(db)
+    await update.message.reply_text("Criada!"); return await start(update, context)
+async def c_del(update, context):
+    kb = []; query = update.callback_query
+    for t in ["gasto","ganho"]: kb.append([InlineKeyboardButton(f"🗑️ {c}", callback_data=f"dc_{t}_{c}")])
+    kb.append([InlineKeyboardButton("🔙", callback_data="back")]); await update.callback_query.edit_message_text("Apagar:", reply_markup=InlineKeyboardMarkup(kb))
+async def c_kill(update, context):
+    _, t, n = update.callback_query.data.split("_"); 
+    if n in db["categories"][t]: db["categories"][t].remove(n); save_db(db)
+    await update.callback_query.edit_message_text("Apagada!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+
+# --- DÍVIDAS ---
+async def menu_debts(update, context):
+    query = update.callback_query; await query.answer()
+    debts = db.get("debts_v2", {})
+    txt = "🧾 **CONTROLE DE PESSOAS**\n\n"
+    kb = []
+    if not debts: txt += "_Ninguém cadastrado._"
+    else:
+        for name, val in debts.items():
+            sinal = "🔴 Deve" if val > 0 else "🟢 Crédito"
+            txt += f"👤 **{name}**: {sinal} R$ {abs(val):.2f}\n"
+            kb.append([InlineKeyboardButton(f"✏️ {name}", callback_data=f"edit_debt_{name}")])
+    kb.append([InlineKeyboardButton("➕ Adicionar Pessoa", callback_data="add_person")])
+    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
+    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def add_person_start(update, context):
+    await update.callback_query.edit_message_text("Digite o nome da pessoa:")
+    return DEBT_NAME
+
+async def save_person_name(update, context):
+    name = update.message.text
+    if name not in db["debts_v2"]: db["debts_v2"][name] = 0.0; save_db(db); await update.message.reply_text(f"✅ {name} adicionado(a)!")
+    else: await update.message.reply_text("⚠️ Já existe.")
+    return await start(update, context)
+
+async def edit_debt_menu(update, context):
+    name = update.callback_query.data.replace("edit_debt_", "")
+    context.user_data["debt_name"] = name
+    val = db["debts_v2"].get(name, 0)
+    txt = f"👤 **{name}**\nSaldo atual: R$ {val:.2f}\n\nO que deseja fazer?"
+    kb = [[InlineKeyboardButton("➕ Emprestei (Aumentar)", callback_data="debt_add"), InlineKeyboardButton("➖ Pagou (Diminuir)", callback_data="debt_sub")],
+          [InlineKeyboardButton("🗑️ Excluir Pessoa", callback_data="debt_del"), InlineKeyboardButton("🔙 Voltar", callback_data="menu_debts")]]
+    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def debt_action(update, context):
+    action = update.callback_query.data
+    name = context.user_data.get("debt_name")
+    if not name: return await menu_debts(update, context)
+    if action == "debt_del":
+        if name in db["debts_v2"]: del db["debts_v2"][name]; save_db(db)
+        await update.callback_query.answer("Apagado!"); return await menu_debts(update, context)
+    context.user_data["debt_act"] = "add" if action == "debt_add" else "sub"
+    await update.callback_query.edit_message_text(f"Qual valor para {name}?")
+    return DEBT_VAL
+
+async def debt_save_val(update, context):
+    try:
+        val = float(update.message.text.replace(',', '.'))
+        name = context.user_data.get("debt_name")
+        if name:
+            if context.user_data["debt_act"] == "sub": val = -val
+            db["debts_v2"][name] += val; save_db(db)
+            await update.message.reply_text(f"✅ Atualizado! Novo saldo: R$ {db['debts_v2'][name]:.2f}")
+    except: await update.message.reply_text("❌ Erro.")
+    return await start(update, context)
+
+# --- AGENDA ---
+async def menu_agenda(update, context):
+    query = update.callback_query; await query.answer()
+    rems = db.get("reminders", [])
+    if not rems: await query.edit_message_text("📭 Sem lembretes.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]])); return
+    txt = "⏰ **AGENDA DE LEMBRETES:**\n\n"
+    kb = []; rems.sort(key=lambda x: x['time'])
+    for i, r in enumerate(rems):
+        txt += f"📅 {r['time']} - {r['text']}\n"
+        kb.append([InlineKeyboardButton(f"🗑️ Apagar {r['time'].split(' ')[1]}", callback_data=f"del_agenda_{i}")])
+    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
+    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def agenda_del(update, context):
+    query = update.callback_query
+    try:
+        idx = int(query.data.replace("del_agenda_", ""))
+        if 0 <= idx < len(db["reminders"]):
+            removed = db["reminders"].pop(idx); save_db(db)
+            await query.answer(f"🗑️ Lembrete apagado!"); await menu_agenda(update, context)
+        else: await query.answer("Erro.")
+    except: await query.answer("Erro.")
+
+class MockQuery:
+    def __init__(self, data, msg): self.data = data; self.message = msg
+    async def answer(self, *args, **kwargs): pass
+    async def edit_message_text(self, text, reply_markup=None, **kwargs): await self.message.reply_text(text, reply_markup=reply_markup)
+
+@restricted
+async def smart_entry(update, context):
+    if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
+    msg = update.message
+    txt = msg.text
+    
+    if txt == "📊 Relatórios": return await menu_reports_trigger(update, context)
+    if txt == "👛 Saldo": return await start(update, context)
+
+    if msg.document and msg.document.file_name.endswith(".json"):
+        f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
+        global db; 
+        with open(DB_FILE, "r") as fl: db = json.load(fl)
+        await msg.reply_text("✅ Backup Restaurado!"); return
+
+    travel = db["config"]["travel_mode"]; panic = db["config"]["panic_mode"]
+    role = {"julius":"Julius Rock", "primo":"Primo Rico", "mae":"Mãe", "zoeiro":"Zoeiro", "padrao":"Assistente"}.get(db["config"]["persona"], "Assistente")
+
+    if panic and txt and any(b in txt.lower() for b in ["lazer","cerveja","pizza","bar","ifood"]):
+        await msg.reply_text("🛑 PÂNICO ATIVO!"); return
+
+    wait = await msg.reply_text("🎤..." if (msg.voice or msg.audio) else "🧠...")
+    mkt = get_market_data()
+    now_user = get_now().strftime("%Y-%m-%d %H:%M")
+    
+    try:
+        content = []; 
+        prompt = f"""
+        SISTEMA: Você é {role}. AGORA: {now_user}.
+        COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}.
+        VIAGEM: {'ON' if travel else 'OFF'}.
+
+        TAREFAS:
+        1. CONSULTA: "quanto gastei", "quem deve", "saldo". JSON: {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo"}}.
+        2. LEMBRETE: "lembrar". JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
+        3. REGISTRO: JSON: {{"type":"gasto" ou "ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
+           *Se VIAGEM=ON, converta.*
+        4. CONVERSA: Texto.
+        """
+        content.append(prompt)
+        file_path = None
+        
+        if msg.photo:
+            f = await context.bot.get_file(msg.photo[-1].file_id); d = await f.download_as_bytearray()
+            content.append({"mime_type": "image/jpeg", "data": d})
+        elif msg.voice or msg.audio:
+            fid = (msg.voice or msg.audio).file_id; f = await context.bot.get_file(fid)
+            ext = ".ogg" if msg.voice else ".mp3"; file_path = f"aud_{uuid.uuid4()}{ext}"
+            await f.download_to_drive(file_path)
+            try:
+                up = genai.upload_file(file_path)
+                while up.state.name == "PROCESSING": time.sleep(1)
+                content.append(up)
+            except: 
+                if os.path.exists(file_path): os.remove(file_path)
+                await wait.edit_text("Erro upload."); return
+        else: content.append(f"Input: {txt}")
+            
+        resp = model_ai.generate_content(content)
+        t = resp.text.strip().replace("```json", "").replace("```", "")
+        if file_path and os.path.exists(file_path): os.remove(file_path)
+        
+        data = None
+        if "{" in t:
+            try: data = json.loads(t[t.find("{"):t.rfind("}")+1])
+            except: 
+                try: data = ast.literal_eval(t[t.find("{"):t.rfind("}")+1])
+                except: pass
+        
+        if data:
+            if 'type' in data: data['type'] = data['type'].lower()
+
+            if data.get('type') == 'consulta':
+                kind = data.get('kind'); term = data.get('term', '').lower(); res_txt = ""
+                if kind == 'gastos':
+                    m = get_now().strftime("%m/%Y"); total = 0
+                    for tr in db["transactions"]:
+                        if m in tr['date'] and str(tr['type']).lower() == 'gasto' and (term in tr['category'].lower() or term in tr['description'].lower()): total += tr['value']
+                    res_txt = f"🔍 **Gasto Mensal ({term}):** R$ {total:.2f}"
+                elif kind == 'dividas':
+                    debts = db.get("debts_v2", {})
+                    found = [f"{k}: R$ {v:.2f}" for k, v in debts.items() if term in k.lower()]
+                    res_txt = "🧾 **Pessoas:**\n" + ("\n".join(found) if found else "Ninguém.")
+                await wait.edit_text(res_txt, parse_mode="Markdown"); return
+
+            if data.get('type') == 'lembrete':
+                if "reminders" not in db: db["reminders"] = []
+                db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id}); save_db(db)
+                await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}", parse_mode="Markdown"); return
+
+            if data['type']=='gasto' and check_budget(data['category'], float(data['value'])) and panic: await wait.edit_text("🛑 Teto!"); return
+            inst = data.get("installments", 1); val = float(data['value'])
+            for i in range(inst):
+                dt = get_now() + relativedelta(months=i); desc = data['description']
+                if inst > 1: desc += f" ({i+1}/{inst})"
+                tr = {"id":str(uuid.uuid4())[:8], "type":data['type'], "value":val/inst if inst>1 else val, "category":data['category'], "description":desc, "date":dt.strftime("%d/%m/%Y %H:%M")}
+                db["transactions"].append(tr)
+            
+            save_db(db); context.user_data["last_id"] = tr["id"]
+            saldo_now, _ = calc_stats()
+            
+            msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}\n\n💰 Saldo Total: **R$ {saldo_now:.2f}**"
+            if inst>1: msg_ok += f"\n📅 {inst}x"
+            if data.get('comment'): msg_ok += f"\n🗣️ {data['comment']}"
+            if travel and "dolar" in str(txt).lower(): msg_ok += f"\n(Conv: USD {mkt['usd']:.2f})"
+            
+            kb = [[InlineKeyboardButton("↩️ Desfazer", callback_data="undo_quick")]]
+            await wait.edit_text(msg_ok, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+        else: await wait.edit_text(t)
+    except Exception as e: await wait.edit_text(f"⚠️ Erro: {e}")
+
+async def undo_quick(update, context):
+    query = update.callback_query; await query.answer(); lid = context.user_data.get("last_id")
+    if lid: db["transactions"] = [t for t in db["transactions"] if t['id'] != lid]; save_db(db); await query.edit_message_text("🗑️ Desfeito!")
+    else: await query.edit_message_text("Nada para desfazer.")
+
 async def cancel_op(update, context):
     await update.message.reply_text("🚫 Cancelado.", reply_markup=ReplyKeyboardMarkup([["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]], resize_keyboard=True))
     return ConversationHandler.END
 
-# ================= EXECUÇÃO =================
+# ================= MAIN =================
 if __name__ == "__main__":
     start_keep_alive()
     app = ApplicationBuilder().token(TOKEN).build()
-    app.add_error_handler(error_handler) # Anti-Crash
     
     scheduler = BackgroundScheduler()
     scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app])
@@ -766,5 +700,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V68 ANTI-CRASH RODANDO!")
+    print("💎 V69 RESURRECTION RODANDO!")
     app.run_polling(drop_pending_updates=True)
