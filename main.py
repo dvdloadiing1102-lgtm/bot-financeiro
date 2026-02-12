@@ -58,15 +58,15 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v71_final.json"
+DB_FILE = "finance_v72_vision.json"
 
-# DEFINIÇÃO DOS ESTADOS (CRUCIAL PARA NÃO DAR ERRO)
+# ESTADOS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
-# ================= 3. SERVIDOR WEB (KEEP ALIVE) =================
+# ================= 3. SERVIDOR WEB =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V71 Online!"
+def home(): return "Bot V72 Vision Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -557,7 +557,7 @@ async def smart_entry(update, context):
         
         if msg.photo:
             f = await context.bot.get_file(msg.photo[-1].file_id); d = await f.download_as_bytearray()
-            content.append({"mime_type": "image/jpeg", "data": d})
+            content.append({"mime_type": "image/jpeg", "data": bytes(d)}) # CORREÇÃO V72
         elif msg.voice or msg.audio:
             fid = (msg.voice or msg.audio).file_id; f = await context.bot.get_file(fid)
             ext = ".ogg" if msg.voice else ".mp3"; file_path = f"aud_{uuid.uuid4()}{ext}"
@@ -649,7 +649,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V71**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V72**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -721,5 +721,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V71 FINAL VERSION RODANDO!")
+    print("💎 V72 VISION FIX RODANDO!")
     app.run_polling(drop_pending_updates=True)
