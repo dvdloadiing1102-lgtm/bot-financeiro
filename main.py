@@ -20,6 +20,9 @@ def install_package(package):
 try: from flask import Flask
 except ImportError: install_package("flask"); from flask import Flask
 
+try: from apscheduler.schedulers.background import BackgroundScheduler
+except ImportError: install_package("apscheduler"); from apscheduler.schedulers.background import BackgroundScheduler
+
 try:
     import matplotlib
     matplotlib.use('Agg')
@@ -55,12 +58,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v58_jobqueue.json"
+DB_FILE = "finance_v59_stable.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V58 (JobQueue) Online!"
+def home(): return "Bot V59 (Stable) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -126,54 +129,23 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SISTEMA DE LEMBRETES (JOB QUEUE) =================
-async def send_reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    try:
-        # Envia a mensagem
-        await context.bot.send_message(chat_id=job.chat_id, text=f"⏰ **LEMBRETE!**\n\n📌 {job.data}", parse_mode="Markdown")
+# ================= SCHEDULER =================
+async def check_reminders(context):
+    now_str = get_now().strftime("%Y-%m-%d %H:%M")
+    to_remove = []
+    
+    if "reminders" in db and db["reminders"]:
+        for i, rem in enumerate(db["reminders"]):
+            if rem["time"] == now_str:
+                try:
+                    await context.bot.send_message(chat_id=rem["chat_id"], text=f"⏰ **LEMBRETE!**\n\n📌 {rem['text']}", parse_mode="Markdown")
+                    to_remove.append(i)
+                except: pass
         
-        # Remove do banco de dados
-        # Nota: Isso é um pouco ineficiente em escala, mas funciona para uso pessoal
-        # Procura o lembrete exato para remover
-        global db
-        reminders_copy = db["reminders"][:]
-        for rem in reminders_copy:
-            if rem["text"] == job.data and rem["chat_id"] == job.chat_id:
-                db["reminders"].remove(rem)
-                break
-        save_db(db)
-        
-    except Exception as e:
-        print(f"Erro ao enviar lembrete: {e}")
-
-def schedule_reminder(application, chat_id, text, time_str):
-    """Agenda um lembrete no JobQueue"""
-    try:
-        target_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
-        now = get_now().replace(second=0, microsecond=0) # Remove segundos para comparar limpo
-        
-        # Calcula delay em segundos
-        delay = (target_time - now).total_seconds()
-        
-        if delay < 0:
-            # Se já passou, manda agora como "Atrasado"
-            application.job_queue.run_once(send_reminder_job, 1, chat_id=chat_id, data=f"[ATRASADO] {text}")
-        else:
-            # Agenda pro futuro
-            application.job_queue.run_once(send_reminder_job, delay, chat_id=chat_id, data=text)
-            
-        return True
-    except Exception as e:
-        print(f"Erro agendamento: {e}")
-        return False
-
-def reload_reminders(application):
-    """Re-agenda tudo ao reiniciar o bot"""
-    if "reminders" in db:
-        print(f"♻️ Recarregando {len(db['reminders'])} lembretes...")
-        for rem in db["reminders"]:
-            schedule_reminder(application, rem["chat_id"], rem["text"], rem["time"])
+        if to_remove:
+            for index in sorted(to_remove, reverse=True):
+                del db["reminders"][index]
+            save_db(db)
 
 # ================= VIP =================
 def is_vip(user_id):
@@ -273,7 +245,6 @@ async def smart_entry(update, context):
         f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
         global db; 
         with open(DB_FILE, "r") as fl: db = json.load(fl)
-        reload_reminders(context.application) # Recarrega lembretes ao restaurar backup
         await msg.reply_text("✅ Backup Restaurado!"); return
 
     travel = db["config"]["travel_mode"]; panic = db["config"]["panic_mode"]
@@ -331,14 +302,9 @@ async def smart_entry(update, context):
         
         if data:
             if data.get('type') == 'lembrete':
-                # Salva no DB
                 if "reminders" not in db: db["reminders"] = []
                 db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id})
                 save_db(db)
-                
-                # Agenda no JobQueue
-                schedule_reminder(context.application, update.effective_chat.id, data['text'], data['time'])
-                
                 await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}")
                 return
 
@@ -385,7 +351,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V58**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V59**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -561,28 +527,6 @@ async def rep_nospend(update, context):
         if d%7==0: txt+="\n"
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
-async def reg_start(update, context): 
-    if not update.callback_query: msg = await update.message.reply_text("🔄"); update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup)})
-    query = update.callback_query; await query.answer()
-    kb = [[InlineKeyboardButton("💸 Gasto", callback_data="reg_gasto"), InlineKeyboardButton("💰 Ganho", callback_data="reg_ganho")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return REG_TYPE
-async def reg_type(update, context):
-    query = update.callback_query; await query.answer()
-    if query.data == "start": return await start(update, context)
-    context.user_data["t"] = query.data.replace("reg_", ""); await query.edit_message_text("Valor:"); return REG_VALUE
-async def reg_val(update, context): 
-    try: context.user_data["v"] = float(update.message.text.replace(',', '.'))
-    except: return REG_VALUE
-    cats = db["categories"][context.user_data["t"]]; kb = []
-    for i in range(0, len(cats), 2): kb.append([InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in cats[i:i+2]])
-    await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb)); return REG_CAT
-async def reg_cat(update, context): context.user_data["c"] = update.callback_query.data.replace("sc_", ""); kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")]]; await update.callback_query.edit_message_text("Descrição:", reply_markup=InlineKeyboardMarkup(kb)); return REG_DESC
-async def reg_fin(update, context):
-    desc = update.message.text if update.message else "Manual"; 
-    if update.callback_query and update.callback_query.data == "skip_d": desc = context.user_data["c"]
-    db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":context.user_data["t"], "value":context.user_data["v"], "category":context.user_data["c"], "description":desc, "date":get_now().strftime("%d/%m/%Y %H:%M")})
-    save_db(db); await (update.message or update.callback_query.message).reply_text("✅ Salvo!"); return await start(update, context)
-
 async def menu_cats(update, context):
     query = update.callback_query; await query.answer()
     kb = [[InlineKeyboardButton("➕ Criar", callback_data="c_add"), InlineKeyboardButton("❌ Excluir", callback_data="c_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
@@ -655,12 +599,13 @@ if __name__ == "__main__":
     start_keep_alive()
     app = ApplicationBuilder().token(TOKEN).build()
     
-    # RELOAD JOBS
-    reload_reminders(app)
+    # Scheduler
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app])
+    scheduler.start()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("resgatar", redeem_key))
-    app.add_handler(CommandHandler("devo", debt_cmd)); app.add_handler(CommandHandler("receber", debt_cmd))
     app.add_handler(CommandHandler("sonho", dream_cmd)); app.add_handler(CommandHandler("sub", sub_cmd))
     
     reg_h = ConversationHandler(
@@ -705,5 +650,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V58 SYSTEM REWRITE RODANDO!")
+    print("💎 V59 FINAL FIX RODANDO!")
     app.run_polling(drop_pending_updates=True)
