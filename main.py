@@ -11,15 +11,16 @@ import math
 import random
 from datetime import datetime, timedelta
 
-# ================= 1. AUTO-INSTALAÇÃO SEGURA =================
+# ================= 1. AUTO-INSTALAÇÃO DE PACOTES =================
 def install(package):
-    try:
-        __import__(package)
+    try: __import__(package)
     except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        print(f"📦 Instalando {package}...")
+        try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        except: pass
 
-required = ["flask", "apscheduler", "telegram", "google.generativeai", "matplotlib", "reportlab", "python-dateutil", "requests"]
-for lib in required: install(lib)
+libs = ["flask", "apscheduler", "telegram", "google.generativeai", "matplotlib", "reportlab", "python-dateutil", "requests"]
+for lib in libs: install(lib)
 
 # ================= 2. IMPORTAÇÕES =================
 from flask import Flask
@@ -47,7 +48,7 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v81_final.json"
+DB_FILE = "finance_v82_legacy.json"
 
 # ESTADOS GLOBAIS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
@@ -55,7 +56,7 @@ DB_FILE = "finance_v81_final.json"
 # ================= 4. SERVIDOR WEB =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V81 Online e Rodando!"
+def home(): return "Bot V82 Legacy Online!"
 
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -105,11 +106,13 @@ def save_db(data):
 
 db = load_db()
 
-# IA SETUP
+# IA SETUP (MODO LEGACY - 100% COMPATÍVEL)
 model_ai = None
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    try: model_ai = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        # Usa o modelo PRO clássico que funciona na v1beta
+        model_ai = genai.GenerativeModel('gemini-pro')
     except: model_ai = None
 
 # SCHEDULER
@@ -162,7 +165,7 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= 6. FUNÇÕES OBRIGATÓRIAS (TOPO) =================
+# ================= 6. FUNÇÕES DE FLUXO =================
 
 async def start(update, context):
     context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
@@ -181,7 +184,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V81**\n{msg_vip}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V82**\n{msg_vip}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -262,7 +265,7 @@ async def debt_save_val(update, context):
     except: await update.message.reply_text("❌ Erro.")
     return await start(update, context)
 
-# --- MANUAL DE GASTOS ---
+# --- MANUAL ---
 async def manual_gasto_trigger(update, context):
     context.user_data["t"] = "gasto"
     await update.message.reply_text("💸 Valor? (Ex: 50.90)")
@@ -459,7 +462,7 @@ async def dream_cmd(update, context):
 
 async def menu_help(update, context):
     query = update.callback_query; await query.answer()
-    txt = """📚 **MANUAL** 🎓\n1. **Fale:** "Gastei 50 no mercado", "Ganhei 1000".\n2. **Pergunte:** "Quanto gastei com iFood?", "Qual saldo?".\n3. **Agenda:** "Me lembre de pagar a luz dia 10".\n4. **Dívidas:** Menu 🧾 Dívidas.\n5. **Apagar:** Relatórios -> Gerenciar."""
+    txt = """📚 **MANUAL** 🎓\n1. **Fale:** "Gastei 50 no mercado", "Ganhei 1000".\n2. **Pergunte:** "Quanto gastei com iFood?", "Qual saldo?".\n3. **Mercado:** "Adicionar leite na lista".\n4. **Agenda:** "Me lembre de pagar a luz dia 10".\n5. **Dívidas:** Use o menu 🧾 Dívidas para controlar quem te deve.\n6. **Apagar:** Use Relatórios -> Gerenciar."""
     kb = [[InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -581,9 +584,9 @@ async def smart_entry(update, context):
         else: await wait.edit_text(t)
     except Exception as e: await wait.edit_text(f"⚠️ Erro IA: {e}")
 
-# ================= 7. MAIN (O CÉREBRO FINAL) =================
+# ================= 7. MAIN =================
 def main():
-    print("🚀 Iniciando Bot V81...")
+    print("🚀 Iniciando Bot V82 Legacy...")
     start_keep_alive()
     app = ApplicationBuilder().token(TOKEN).build()
     
