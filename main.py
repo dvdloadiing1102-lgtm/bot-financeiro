@@ -58,15 +58,15 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v74_stable.json"
+DB_FILE = "finance_v75_linear.json"
 
-# ESTADOS GLOBAIS (IMPORTANTE)
+# ESTADOS GLOBAIS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
 # ================= 3. SERVIDOR WEB =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V74 Stable Online!"
+def home(): return "Bot V75 Linear Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -176,7 +176,7 @@ def check_budget(cat, val):
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= 5. TODAS AS FUNÇÕES (DEFINIDAS ANTES DO USO) =================
+# ================= 5. FUNÇÕES DE MENU (ORDEM CORRETA) =================
 
 async def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID: return
@@ -433,22 +433,8 @@ async def c_kill(update, context):
     if n in db["categories"][t]: db["categories"][t].remove(n); save_db(db)
     await update.callback_query.edit_message_text("Apagada!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 
-# --- DÍVIDAS (DEFINIDA ANTES DO HANDLER) ---
-async def menu_debts(update, context):
-    query = update.callback_query; await query.answer()
-    debts = db.get("debts_v2", {})
-    txt = "🧾 **CONTROLE DE PESSOAS**\n\n"
-    kb = []
-    if not debts: txt += "_Ninguém cadastrado._"
-    else:
-        for name, val in debts.items():
-            sinal = "🔴 Deve" if val > 0 else "🟢 Crédito"
-            txt += f"👤 **{name}**: {sinal} R$ {abs(val):.2f}\n"
-            kb.append([InlineKeyboardButton(f"✏️ {name}", callback_data=f"edit_debt_{name}")])
-    kb.append([InlineKeyboardButton("➕ Adicionar Pessoa", callback_data="add_person")])
-    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
+# --- DÍVIDAS ---
+# IMPORTANTE: FUNÇÕES DEFINIDAS ANTES DO HANDLER SER CRIADO
 async def add_person_start(update, context):
     await update.callback_query.edit_message_text("Digite o nome da pessoa:")
     return DEBT_NAME
@@ -458,26 +444,6 @@ async def save_person_name(update, context):
     if name and name not in db["debts_v2"]: db["debts_v2"][name] = 0.0; save_db(db); await update.message.reply_text(f"✅ {name} adicionado(a)!")
     else: await update.message.reply_text("⚠️ Já existe ou nome inválido.")
     return await start(update, context)
-
-async def edit_debt_menu(update, context):
-    name = update.callback_query.data.replace("edit_debt_", "")
-    context.user_data["debt_name"] = name
-    val = db["debts_v2"].get(name, 0)
-    txt = f"👤 **{name}**\nSaldo atual: R$ {val:.2f}\n\nO que deseja fazer?"
-    kb = [[InlineKeyboardButton("➕ Emprestei (Aumentar)", callback_data="debt_add"), InlineKeyboardButton("➖ Pagou (Diminuir)", callback_data="debt_sub")],
-          [InlineKeyboardButton("🗑️ Excluir Pessoa", callback_data="debt_del"), InlineKeyboardButton("🔙 Voltar", callback_data="menu_debts")]]
-    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def debt_action(update, context):
-    action = update.callback_query.data
-    name = context.user_data.get("debt_name")
-    if not name: return await menu_debts(update, context)
-    if action == "debt_del":
-        if name in db["debts_v2"]: del db["debts_v2"][name]; save_db(db)
-        await update.callback_query.answer("Apagado!"); return await menu_debts(update, context)
-    context.user_data["debt_act"] = "add" if action == "debt_add" else "sub"
-    await update.callback_query.edit_message_text(f"Qual valor para {name}?")
-    return DEBT_VAL
 
 async def debt_save_val(update, context):
     try:
@@ -489,6 +455,17 @@ async def debt_save_val(update, context):
             await update.message.reply_text(f"✅ Atualizado! Novo saldo: R$ {db['debts_v2'][name]:.2f}")
     except: await update.message.reply_text("❌ Erro.")
     return await start(update, context)
+
+async def debt_action(update, context):
+    action = update.callback_query.data
+    name = context.user_data.get("debt_name")
+    if not name: return await menu_debts(update, context)
+    if action == "debt_del":
+        if name in db["debts_v2"]: del db["debts_v2"][name]; save_db(db)
+        await update.callback_query.answer("Apagado!"); return await menu_debts(update, context)
+    context.user_data["debt_act"] = "add" if action == "debt_add" else "sub"
+    await update.callback_query.edit_message_text(f"Qual valor para {name}?")
+    return DEBT_VAL
 
 class MockQuery:
     def __init__(self, data, msg): self.data = data; self.message = msg
@@ -637,7 +614,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V74**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V75**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -709,5 +686,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V74 STABLE ARCHITECTURE RODANDO!")
+    print("💎 V75 LINEAR STRUCTURE RODANDO!")
     app.run_polling(drop_pending_updates=True)
