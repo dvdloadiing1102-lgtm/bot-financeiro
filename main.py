@@ -58,21 +58,21 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v70_clean.json"
+DB_FILE = "finance_v71_final.json"
 
-# DEFINIÇÃO DOS ESTADOS (IMPORTANTE: FICA NO TOPO)
+# DEFINIÇÃO DOS ESTADOS (CRUCIAL PARA NÃO DAR ERRO)
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
 # ================= 3. SERVIDOR WEB (KEEP ALIVE) =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V70 Online!"
+def home(): return "Bot V71 Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
 def start_keep_alive(): threading.Thread(target=run_http, daemon=True).start()
 
-# ================= 4. UTILITÁRIOS & BANCO DE DADOS =================
+# ================= 4. UTILITÁRIOS =================
 plt.style.use('dark_background')
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6', '#c4e17f']
 
@@ -163,20 +163,20 @@ def restricted(func):
 # CÁLCULOS
 def calc_stats():
     n = get_now(); m = n.strftime("%m/%Y")
-    gan = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'ganho')
-    gas = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'gasto')
+    gan = sum(t['value'] for t in db["transactions"] if str(t['type']).lower() == 'ganho')
+    gas = sum(t['value'] for t in db["transactions"] if str(t['type']).lower() == 'gasto')
     saldo = gan - gas
-    gas_mes = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'gasto' and m in t['date'])
+    gas_mes = sum(t['value'] for t in db["transactions"] if str(t['type']).lower() == 'gasto' and m in t['date'])
     return saldo, gas_mes
 
 def check_budget(cat, val):
     lim = db["budgets"].get(cat, 0); m = get_now().strftime("%m/%Y")
     if lim == 0: return None
-    curr = sum(t['value'] for t in db["transactions"] if t['category']==cat and t['type'].lower()=='gasto' and m in t['date'])
+    curr = sum(t['value'] for t in db["transactions"] if t['category']==cat and str(t['type']).lower()=='gasto' and m in t['date'])
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
-# ================= 5. TODAS AS FUNÇÕES DE MENU (ORDEM CORRETA) =================
+# ================= 5. FUNÇÕES DE MENU =================
 
 async def admin_panel(update, context):
     if update.effective_user.id != ADMIN_ID: return
@@ -451,8 +451,8 @@ async def add_person_start(update, context):
 
 async def save_person_name(update, context):
     name = update.message.text
-    if name not in db["debts_v2"]: db["debts_v2"][name] = 0.0; save_db(db); await update.message.reply_text(f"✅ {name} adicionado(a)!")
-    else: await update.message.reply_text("⚠️ Já existe.")
+    if name and name not in db["debts_v2"]: db["debts_v2"][name] = 0.0; save_db(db); await update.message.reply_text(f"✅ {name} adicionado(a)!")
+    else: await update.message.reply_text("⚠️ Já existe ou nome inválido.")
     return await start(update, context)
 
 async def edit_debt_menu(update, context):
@@ -509,7 +509,6 @@ async def agenda_del(update, context):
         else: await query.answer("Erro.")
     except: await query.answer("Erro.")
 
-# ================= MENU PRINCIPAL =================
 class MockQuery:
     def __init__(self, data, msg): self.data = data; self.message = msg
     async def answer(self, *args, **kwargs): pass
@@ -542,17 +541,23 @@ async def smart_entry(update, context):
     
     try:
         content = []; 
-        prompt = f"""SISTEMA: Você é {role}. AGORA: {now_user}. COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}. VIAGEM: {'ON' if travel else 'OFF'}.
+        prompt = f"""
+        SISTEMA: Você é {role}. AGORA: {now_user}.
+        COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}.
+        VIAGEM: {'ON' if travel else 'OFF'}.
+
         TAREFAS:
         1. CONSULTA: "quanto gastei", "quem deve", "saldo". JSON: {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo"}}.
         2. LEMBRETE: "lembrar". JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
         3. REGISTRO: JSON: {{"type":"gasto" ou "ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
            *Use 'gasto' ou 'ganho' MINÚSCULO. Se VIAGEM=ON, converta.*
-        4. CONVERSA: Texto."""
+        4. CONVERSA: Texto.
+        """
+        content.append(prompt) # CORREÇÃO V71: PROMPT SEMPRE NO INÍCIO
         
         if msg.photo:
             f = await context.bot.get_file(msg.photo[-1].file_id); d = await f.download_as_bytearray()
-            content.append(prompt); content.append({"mime_type": "image/jpeg", "data": d})
+            content.append({"mime_type": "image/jpeg", "data": d})
         elif msg.voice or msg.audio:
             fid = (msg.voice or msg.audio).file_id; f = await context.bot.get_file(fid)
             ext = ".ogg" if msg.voice else ".mp3"; file_path = f"aud_{uuid.uuid4()}{ext}"
@@ -560,11 +565,11 @@ async def smart_entry(update, context):
             try:
                 up = genai.upload_file(file_path)
                 while up.state.name == "PROCESSING": time.sleep(1)
-                content.append(prompt); content.append(up)
+                content.append(up)
             except: 
                 if os.path.exists(file_path): os.remove(file_path)
                 await wait.edit_text("Erro upload."); return
-        else: content.append(prompt); content.append(f"Input: {txt}")
+        else: content.append(f"Input: {txt}")
             
         resp = model_ai.generate_content(content)
         t = resp.text.strip().replace("```json", "").replace("```", "")
@@ -638,13 +643,13 @@ async def start(update, context):
         [InlineKeyboardButton("📂 Categorias", callback_data="menu_cats"), InlineKeyboardButton("🛒 Mercado", callback_data="menu_shop")],
         [InlineKeyboardButton("🧾 Dívidas/Pessoas", callback_data="menu_debts"), InlineKeyboardButton("📊 Relatórios", callback_data="menu_reports")],
         [InlineKeyboardButton("🎲 Roleta", callback_data="roleta"), InlineKeyboardButton("⏰ Agenda", callback_data="menu_agenda")],
-        [InlineKeyboardButton("⚙️ Configs", callback_data="menu_conf"), InlineKeyboardButton("📚 Manual", callback_data="menu_help")],
+        [InlineKeyboardButton("⚙️ Configs", callback_data="menu_conf"), InlineKeyboardButton("📚 Manual de Uso", callback_data="menu_help")],
         [InlineKeyboardButton("💾 Backup", callback_data="backup")]
     ]
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V70**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V71**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -716,5 +721,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V70 CLEAN SLATE RODANDO!")
+    print("💎 V71 FINAL VERSION RODANDO!")
     app.run_polling(drop_pending_updates=True)
