@@ -12,7 +12,7 @@ import random
 import requests
 from datetime import datetime, timedelta
 
-# ================= AUTO-CORREÇÃO =================
+# ================= AUTO-CORREÇÃO DE PACOTES =================
 def install_package(package):
     try: subprocess.check_call([sys.executable, "-m", "pip", "install", package])
     except: pass
@@ -58,12 +58,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v63_balance.json"
+DB_FILE = "finance_v65_audited.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V63 (Balance Fix) Online!"
+def home(): return "Bot V65 Audited Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -140,7 +140,7 @@ async def check_reminders(context):
             for index in sorted(to_remove, reverse=True): del db["reminders"][index]
             save_db(db)
 
-# ================= VIP & UTILS =================
+# ================= VIP & SEGURANÇA =================
 def is_vip(user_id):
     if user_id == ADMIN_ID: return True, "👑 ADMIN"
     uid = str(user_id)
@@ -163,27 +163,25 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
+# ================= CÁLCULOS (NORMALIZAÇÃO) =================
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
-# === CORREÇÃO CRÍTICA AQUI (CALC_STATS) ===
 def calc_stats():
-    n = get_now()
-    m = n.strftime("%m/%Y")
+    n = get_now(); m = n.strftime("%m/%Y")
     
-    # 1. Saldo ACUMULADO (Tudo o que entrou - Tudo o que saiu na história)
-    total_gains = sum(t['value'] for t in db["transactions"] if t['type']=='ganho')
-    total_expenses = sum(t['value'] for t in db["transactions"] if t['type']=='gasto')
-    saldo_atual = total_gains - total_expenses
+    # Normaliza type para minúsculo
+    gan = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'ganho')
+    gas = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'gasto')
     
-    # 2. Gastos do MÊS (Apenas referência visual)
-    month_expenses = sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])
+    saldo = gan - gas
+    gas_mes = sum(t['value'] for t in db["transactions"] if t['type'].lower() == 'gasto' and m in t['date'])
     
-    return saldo_atual, month_expenses
+    return saldo, gas_mes
 
 def check_budget(cat, val):
     lim = db["budgets"].get(cat, 0); m = get_now().strftime("%m/%Y")
     if lim == 0: return None
-    curr = sum(t['value'] for t in db["transactions"] if t['category']==cat and t['type']=='gasto' and m in t['date'])
+    curr = sum(t['value'] for t in db["transactions"] if t['category']==cat and t['type'].lower()=='gasto' and m in t['date'])
     if (curr+val) > lim: return f"🚨 Teto de {cat}!"
     return None
 
@@ -225,23 +223,19 @@ async def redeem_key(update, context):
     db["vip_users"][uid] = new_d.strftime("%Y-%m-%d"); db["vip_keys"][key]["used"] = True; save_db(db)
     await update.message.reply_text(f"🎉 VIP até {new_d.strftime('%d/%m/%Y')}\n/start", parse_mode="Markdown")
 
-# ================= IA & FLUXO =================
-class MockQuery:
-    def __init__(self, data, msg): self.data = data; self.message = msg
-    async def answer(self, *args, **kwargs): pass
-    async def edit_message_text(self, text, reply_markup=None, **kwargs): await self.message.reply_text(text, reply_markup=reply_markup)
-
+# ================= IA =================
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
     msg = update.message
     txt = msg.text
     
-    if txt == "💸 Gasto": update.callback_query = MockQuery('reg_gasto', msg); return await reg_type(update, context)
-    if txt == "💰 Ganho": update.callback_query = MockQuery('reg_ganho', msg); return await reg_type(update, context)
+    # ATALHOS DE TEXTO (AQUI ELES FUNCIONAM COMO GATILHO)
     if txt == "📊 Relatórios": return await menu_reports_trigger(update, context)
     if txt == "👛 Saldo": return await start(update, context)
+    # NOTA: "💸 Gasto" e "💰 Ganho" são tratados no ConversationHandler
 
+    # RESTORE
     if msg.document and msg.document.file_name.endswith(".json"):
         f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
         global db; 
@@ -266,10 +260,10 @@ async def smart_entry(update, context):
         VIAGEM: {'ON' if travel else 'OFF'}.
 
         TAREFAS:
-        1. CONSULTA: Se user perguntar "quanto gastei no ifood", "quem deve", "saldo", gere JSON:
-           {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo"}}.
-        2. LEMBRETE: Se pedir para lembrar, gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
-        3. GASTO/GANHO: Se for registro, gere JSON: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
+        1. CONSULTA: "quanto gastei", "quem deve", "saldo". JSON: {{"type":"consulta", "kind":"gastos" ou "dividas", "term":"termo"}}.
+        2. LEMBRETE: "lembrar". JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
+        3. REGISTRO: JSON: {{"type":"gasto" ou "ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
+           *Use 'gasto' ou 'ganho' MINÚSCULO. Se VIAGEM=ON, converta.*
         4. CONVERSA: Texto.
         """
         content.append(prompt)
@@ -303,32 +297,26 @@ async def smart_entry(update, context):
                 except: pass
         
         if data:
+            # NORMALIZA
+            if 'type' in data: data['type'] = data['type'].lower()
+
             if data.get('type') == 'consulta':
-                kind = data.get('kind')
-                term = data.get('term', '').lower()
-                res_txt = ""
-                
+                kind = data.get('kind'); term = data.get('term', '').lower(); res_txt = ""
                 if kind == 'gastos':
-                    m = get_now().strftime("%m/%Y")
-                    total = 0
+                    m = get_now().strftime("%m/%Y"); total = 0
                     for tr in db["transactions"]:
-                        if m in tr['date'] and tr['type'] == 'gasto' and (term in tr['category'].lower() or term in tr['description'].lower()):
-                            total += tr['value']
-                    res_txt = f"🔍 **Gasto Mensal com '{term}':**\nR$ {total:.2f}"
-                
+                        if m in tr['date'] and tr['type'].lower() == 'gasto' and (term in tr['category'].lower() or term in tr['description'].lower()): total += tr['value']
+                    res_txt = f"🔍 **Gasto Mensal ({term}):** R$ {total:.2f}"
                 elif kind == 'dividas':
                     debts = db.get("debts_v2", {})
-                    found = [f"{k}: R$ {v:.2f}" for k, v in debts.items() if term in k.lower() or term == ""]
+                    found = [f"{k}: R$ {v:.2f}" for k, v in debts.items() if term in k.lower()]
                     res_txt = "🧾 **Pessoas:**\n" + ("\n".join(found) if found else "Ninguém.")
-                
                 await wait.edit_text(res_txt, parse_mode="Markdown"); return
 
             if data.get('type') == 'lembrete':
                 if "reminders" not in db: db["reminders"] = []
-                db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id})
-                save_db(db)
-                await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}", parse_mode="Markdown")
-                return
+                db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id}); save_db(db)
+                await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}", parse_mode="Markdown"); return
 
             if data['type']=='gasto' and check_budget(data['category'], float(data['value'])) and panic: await wait.edit_text("🛑 Teto!"); return
             inst = data.get("installments", 1); val = float(data['value'])
@@ -339,18 +327,16 @@ async def smart_entry(update, context):
                 db["transactions"].append(tr)
             
             save_db(db); context.user_data["last_id"] = tr["id"]
-            
-            # Nova resposta com Saldo Atualizado
             saldo_now, _ = calc_stats()
-            msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}\n\n💰 Saldo Atual: **R$ {saldo_now:.2f}**"
+            
+            msg_ok = f"✅ **R$ {val:.2f}** | {data['category']}\n📝 {data['description']}\n\n💰 Saldo Total: **R$ {saldo_now:.2f}**"
             if inst>1: msg_ok += f"\n📅 {inst}x"
             if data.get('comment'): msg_ok += f"\n🗣️ {data['comment']}"
-            if travel and "dolar" in txt.lower(): msg_ok += f"\n(Conv: USD {mkt['usd']:.2f})"
+            if travel and "dolar" in str(txt).lower(): msg_ok += f"\n(Conv: USD {mkt['usd']:.2f})"
             
             kb = [[InlineKeyboardButton("↩️ Desfazer", callback_data="undo_quick")]]
             await wait.edit_text(msg_ok, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
         else: await wait.edit_text(t)
-            
     except Exception as e: await wait.edit_text(f"⚠️ Erro: {e}")
 
 async def undo_quick(update, context):
@@ -361,7 +347,7 @@ async def undo_quick(update, context):
 # ================= MENU =================
 @restricted
 async def start(update, context):
-    context.user_data.clear(); saldo_total, gastos_mes = calc_stats(); uid = update.effective_user.id; vip_ok, vip_msg = is_vip(uid)
+    context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id; vip_ok, vip_msg = is_vip(uid)
     ind_panic = "🛑 PÂNICO" if db["config"]["panic_mode"] else ""
     ind_travel = "✈️ VIAGEM" if db["config"]["travel_mode"] else ""
     st = f"{ind_panic} {ind_travel}".strip()
@@ -375,8 +361,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    # MSG CORRIGIDA COM SALDO ACUMULADO E GASTO MENSAL
-    msg = f"💎 **FINANCEIRO V63**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo_total:.2f}**\n📉 Gastos (Mês): R$ {gastos_mes:.2f}"
+    msg = f"💎 **FINANCEIRO V65**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -501,14 +486,14 @@ async def rep_list(update, context):
     trans = db["transactions"][-15:]
     if not trans: await query.edit_message_text("📭 Vazio.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]])); return
     txt = "📝 **Últimos 15:**\n\n"
-    for t in reversed(trans): txt += f"{'🔴' if t['type']=='gasto' else '🟢'} {t['date']} | R$ {t['value']:.2f}\n🏷️ {t['category']} - {t['description']}\n\n"
+    for t in reversed(trans): txt += f"{'🔴' if t['type'].lower()=='gasto' else '🟢'} {t['date']} | R$ {t['value']:.2f}\n🏷️ {t['category']} - {t['description']}\n\n"
     await query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
 async def rep_pie(update, context):
     query = update.callback_query; await query.answer()
     cats = {}; m = get_now().strftime("%m/%Y")
     for t in db["transactions"]:
-        if t['type']=='gasto' and m in t['date']: cats[t['category']] = cats.get(t['category'], 0) + t['value']
+        if t['type'].lower()=='gasto' and m in t['date']: cats[t['category']] = cats.get(t['category'], 0) + t['value']
     if not cats: await query.edit_message_text("Sem dados.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]])); return
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=COLORS)
@@ -538,13 +523,13 @@ async def rep_csv(update, context):
 
 async def rep_evo(update, context):
     query = update.callback_query; await query.answer(); d, l = [], []
-    for i in range(5, -1, -1): m = (get_now() - relativedelta(months=i)).strftime("%m/%Y"); d.append(sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])); l.append(m[:2])
+    for i in range(5, -1, -1): m = (get_now() - relativedelta(months=i)).strftime("%m/%Y"); d.append(sum(t['value'] for t in db["transactions"] if t['type'].lower()=='gasto' and m in t['date'])); l.append(m[:2])
     plt.figure(figsize=(6, 4)); plt.plot(l, d, marker='o', color='#00ffcc'); plt.grid(alpha=0.3)
     buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close(); await query.message.reply_photo(buf)
 
 async def rep_nospend(update, context):
     query = update.callback_query; await query.answer(); m = get_now().strftime("%m/%Y")
-    dg = {int(t['date'][:2]) for t in db["transactions"] if t['type']=='gasto' and m in t['date']}
+    dg = {int(t['date'][:2]) for t in db["transactions"] if t['type'].lower()=='gasto' and m in t['date']}
     txt = f"📅 **Mapa ({m})**\n` D S T Q Q S S`\n"
     for d in range(1, 32): 
         if d > get_now().day: break 
@@ -552,24 +537,36 @@ async def rep_nospend(update, context):
         if d%7==0: txt+="\n"
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
-async def reg_start(update, context): 
-    if not update.callback_query: msg = await update.message.reply_text("🔄"); update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup)})
-    query = update.callback_query; 
-    if hasattr(query, 'answer'): await query.answer()
+# MANUAL TRIGGERS
+async def manual_gasto_trigger(update, context):
+    context.user_data["t"] = "gasto"
+    await update.message.reply_text("💸 **Novo Gasto**\nQual o valor? (Ex: 50.90)")
+    return REG_VALUE
+
+async def manual_ganho_trigger(update, context):
+    context.user_data["t"] = "ganho"
+    await update.message.reply_text("💰 **Novo Ganho**\nQual o valor? (Ex: 1500)")
+    return REG_VALUE
+
+async def reg_start(update, context):
+    query = update.callback_query; await query.answer()
     kb = [[InlineKeyboardButton("💸 Gasto", callback_data="reg_gasto"), InlineKeyboardButton("💰 Ganho", callback_data="reg_ganho")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return REG_TYPE
+
 async def reg_type(update, context):
-    query = update.callback_query
-    if hasattr(query, 'answer'): await query.answer()
+    query = update.callback_query; await query.answer()
     if query.data == "start": return await start(update, context)
     context.user_data["t"] = query.data.replace("reg_", ""); await query.edit_message_text("Valor:"); return REG_VALUE
+
 async def reg_val(update, context): 
     try: context.user_data["v"] = float(update.message.text.replace(',', '.'))
     except: return REG_VALUE
     cats = db["categories"][context.user_data["t"]]; kb = []
     for i in range(0, len(cats), 2): kb.append([InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in cats[i:i+2]])
     await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb)); return REG_CAT
+
 async def reg_cat(update, context): context.user_data["c"] = update.callback_query.data.replace("sc_", ""); kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")]]; await update.callback_query.edit_message_text("Descrição:", reply_markup=InlineKeyboardMarkup(kb)); return REG_DESC
+
 async def reg_fin(update, context):
     desc = update.message.text if update.message else "Manual"; 
     if update.callback_query and update.callback_query.data == "skip_d": desc = context.user_data["c"]
@@ -643,6 +640,10 @@ async def dream_cmd(update, context):
     try: v = float(context.args[-1]); s,_,_ = calc_stats(); m = v/(s if s>0 else 100); await update.message.reply_text(f"🛌 Leva {m:.1f} meses.")
     except: pass
 
+async def cancel_op(update, context):
+    await update.message.reply_text("🚫 Operação cancelada.", reply_markup=ReplyKeyboardMarkup([["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]], resize_keyboard=True))
+    return ConversationHandler.END
+
 # ================= EXECUÇÃO =================
 if __name__ == "__main__":
     start_keep_alive()
@@ -654,22 +655,26 @@ if __name__ == "__main__":
     scheduler.start()
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cancel", cancel_op))
     app.add_handler(CommandHandler("resgatar", redeem_key))
     app.add_handler(CommandHandler("sonho", dream_cmd)); app.add_handler(CommandHandler("sub", sub_cmd))
     
+    # REGISTRO MANUAL (COM GATILHOS DE TEXTO CORRIGIDOS)
     reg_h = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(reg_start, pattern="^start_reg"),
             CallbackQueryHandler(reg_type, pattern="^reg_gasto"),
-            CallbackQueryHandler(reg_type, pattern="^reg_ganho")
+            CallbackQueryHandler(reg_type, pattern="^reg_ganho"),
+            MessageHandler(filters.Regex("^(💸 Gasto|Gasto)$"), manual_gasto_trigger),
+            MessageHandler(filters.Regex("^(💰 Ganho|Ganho)$"), manual_ganho_trigger)
         ],
         states={
             REG_TYPE:[CallbackQueryHandler(reg_type)], 
-            REG_VALUE:[MessageHandler(filters.TEXT, reg_val)], 
+            REG_VALUE:[MessageHandler(filters.TEXT & ~filters.COMMAND, reg_val)], 
             REG_CAT:[CallbackQueryHandler(reg_cat)], 
-            REG_DESC:[MessageHandler(filters.TEXT, reg_fin), CallbackQueryHandler(reg_fin, pattern="^skip_d")]
+            REG_DESC:[MessageHandler(filters.TEXT & ~filters.COMMAND, reg_fin), CallbackQueryHandler(reg_fin, pattern="^skip_d")]
         }, 
-        fallbacks=[CallbackQueryHandler(back, pattern="^back")]
+        fallbacks=[CommandHandler("cancel", cancel_op), CallbackQueryHandler(back, pattern="^back")]
     )
     
     cat_h = ConversationHandler(entry_points=[CallbackQueryHandler(c_add, pattern="^c_add")], states={CAT_ADD_TYPE:[CallbackQueryHandler(c_type)], CAT_ADD_NAME:[MessageHandler(filters.TEXT, c_save)]}, fallbacks=[CallbackQueryHandler(back, pattern="^back")])
@@ -699,5 +704,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V63 BALANCE FIX RODANDO!")
+    print("💎 V65 FINAL AUDITED RODANDO!")
     app.run_polling(drop_pending_updates=True)
