@@ -58,7 +58,7 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v72_vision.json"
+DB_FILE = "finance_v73_shopfix.json"
 
 # ESTADOS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
@@ -66,7 +66,7 @@ DB_FILE = "finance_v72_vision.json"
 # ================= 3. SERVIDOR WEB =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V72 Vision Online!"
+def home(): return "Bot V73 ShopFix Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -320,9 +320,14 @@ async def tg_panic(update, context): db["config"]["panic_mode"] = not db["config
 async def tg_travel(update, context): db["config"]["travel_mode"] = not db["config"]["travel_mode"]; save_db(db); await menu_conf(update, context)
 
 async def menu_shop(update, context):
-    l = db["shopping_list"]; txt = "**🛒 Mercado:**\n" + "\n".join(l)
-    kb = [[InlineKeyboardButton("🗑️ Limpar", callback_data="sl_c")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await update.callback_query.edit_message_text(txt + "\nFale para adicionar!", reply_markup=InlineKeyboardMarkup(kb))
+    l = db["shopping_list"]
+    txt = "**🛒 Mercado (Lista):**\n"
+    if not l: txt += "_Lista vazia._"
+    else: txt += "\n".join([f"• {item}" for item in l])
+    
+    kb = [[InlineKeyboardButton("🗑️ Limpar Lista", callback_data="sl_c")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    await update.callback_query.edit_message_text(txt + "\n\n🗣️ *Dica: Fale 'Adicionar leite na lista'*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
 async def sl_c(update, context): db["shopping_list"] = []; save_db(db); await start(update, context)
 
 async def menu_persona(update, context):
@@ -369,7 +374,7 @@ async def dream_cmd(update, context):
 
 async def menu_help(update, context):
     query = update.callback_query; await query.answer()
-    txt = """📚 **MANUAL** 🎓\n1. **Fale:** "Gastei 50 no mercado", "Ganhei 1000".\n2. **Pergunte:** "Quanto gastei com iFood?", "Qual saldo?".\n3. **Agenda:** "Me lembre de pagar a luz dia 10".\n4. **Dívidas:** Use o menu 🧾 Dívidas para controlar quem te deve.\n5. **Apagar:** Use Relatórios -> Gerenciar."""
+    txt = """📚 **MANUAL** 🎓\n1. **Fale:** "Gastei 50 no mercado", "Ganhei 1000".\n2. **Pergunte:** "Quanto gastei com iFood?", "Qual saldo?".\n3. **Mercado:** "Adicionar leite na lista".\n4. **Agenda:** "Me lembre de pagar a luz dia 10".\n5. **Dívidas:** Menu 🧾 Dívidas.\n6. **Apagar:** Relatórios -> Gerenciar."""
     kb = [[InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -429,86 +434,6 @@ async def c_kill(update, context):
     if n in db["categories"][t]: db["categories"][t].remove(n); save_db(db)
     await update.callback_query.edit_message_text("Apagada!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 
-# --- DÍVIDAS ---
-async def menu_debts(update, context):
-    query = update.callback_query; await query.answer()
-    debts = db.get("debts_v2", {})
-    txt = "🧾 **CONTROLE DE PESSOAS**\n\n"
-    kb = []
-    if not debts: txt += "_Ninguém cadastrado._"
-    else:
-        for name, val in debts.items():
-            sinal = "🔴 Deve" if val > 0 else "🟢 Crédito"
-            txt += f"👤 **{name}**: {sinal} R$ {abs(val):.2f}\n"
-            kb.append([InlineKeyboardButton(f"✏️ {name}", callback_data=f"edit_debt_{name}")])
-    kb.append([InlineKeyboardButton("➕ Adicionar Pessoa", callback_data="add_person")])
-    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def add_person_start(update, context):
-    await update.callback_query.edit_message_text("Digite o nome da pessoa:")
-    return DEBT_NAME
-
-async def save_person_name(update, context):
-    name = update.message.text
-    if name and name not in db["debts_v2"]: db["debts_v2"][name] = 0.0; save_db(db); await update.message.reply_text(f"✅ {name} adicionado(a)!")
-    else: await update.message.reply_text("⚠️ Já existe ou nome inválido.")
-    return await start(update, context)
-
-async def edit_debt_menu(update, context):
-    name = update.callback_query.data.replace("edit_debt_", "")
-    context.user_data["debt_name"] = name
-    val = db["debts_v2"].get(name, 0)
-    txt = f"👤 **{name}**\nSaldo atual: R$ {val:.2f}\n\nO que deseja fazer?"
-    kb = [[InlineKeyboardButton("➕ Emprestei (Aumentar)", callback_data="debt_add"), InlineKeyboardButton("➖ Pagou (Diminuir)", callback_data="debt_sub")],
-          [InlineKeyboardButton("🗑️ Excluir Pessoa", callback_data="debt_del"), InlineKeyboardButton("🔙 Voltar", callback_data="menu_debts")]]
-    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def debt_action(update, context):
-    action = update.callback_query.data
-    name = context.user_data.get("debt_name")
-    if not name: return await menu_debts(update, context)
-    if action == "debt_del":
-        if name in db["debts_v2"]: del db["debts_v2"][name]; save_db(db)
-        await update.callback_query.answer("Apagado!"); return await menu_debts(update, context)
-    context.user_data["debt_act"] = "add" if action == "debt_add" else "sub"
-    await update.callback_query.edit_message_text(f"Qual valor para {name}?")
-    return DEBT_VAL
-
-async def debt_save_val(update, context):
-    try:
-        val = float(update.message.text.replace(',', '.'))
-        name = context.user_data.get("debt_name")
-        if name:
-            if context.user_data["debt_act"] == "sub": val = -val
-            db["debts_v2"][name] += val; save_db(db)
-            await update.message.reply_text(f"✅ Atualizado! Novo saldo: R$ {db['debts_v2'][name]:.2f}")
-    except: await update.message.reply_text("❌ Erro.")
-    return await start(update, context)
-
-# --- AGENDA ---
-async def menu_agenda(update, context):
-    query = update.callback_query; await query.answer()
-    rems = db.get("reminders", [])
-    if not rems: await query.edit_message_text("📭 Sem lembretes.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]])); return
-    txt = "⏰ **AGENDA DE LEMBRETES:**\n\n"
-    kb = []; rems.sort(key=lambda x: x['time'])
-    for i, r in enumerate(rems):
-        txt += f"📅 {r['time']} - {r['text']}\n"
-        kb.append([InlineKeyboardButton(f"🗑️ Apagar {r['time'].split(' ')[1]}", callback_data=f"del_agenda_{i}")])
-    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def agenda_del(update, context):
-    query = update.callback_query
-    try:
-        idx = int(query.data.replace("del_agenda_", ""))
-        if 0 <= idx < len(db["reminders"]):
-            removed = db["reminders"].pop(idx); save_db(db)
-            await query.answer(f"🗑️ Lembrete apagado!"); await menu_agenda(update, context)
-        else: await query.answer("Erro.")
-    except: await query.answer("Erro.")
-
 class MockQuery:
     def __init__(self, data, msg): self.data = data; self.message = msg
     async def answer(self, *args, **kwargs): pass
@@ -551,7 +476,8 @@ async def smart_entry(update, context):
         2. LEMBRETE: "lembrar". JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
         3. REGISTRO: JSON: {{"type":"gasto" ou "ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
            *Use 'gasto' ou 'ganho' MINÚSCULO. Se VIAGEM=ON, converta.*
-        4. CONVERSA: Texto.
+        4. MERCADO: "põe leite na lista", "lista comprar pão". JSON: {{"type":"mercado", "item":"produto"}}.
+        5. CONVERSA: Texto.
         """
         content.append(prompt) # CORREÇÃO V71: PROMPT SEMPRE NO INÍCIO
         
@@ -584,6 +510,13 @@ async def smart_entry(update, context):
         
         if data:
             if 'type' in data: data['type'] = data['type'].lower()
+
+            # V73 - CORREÇÃO MERCADO
+            if data.get('type') == 'mercado':
+                db["shopping_list"].append(data['item'])
+                save_db(db)
+                await wait.edit_text(f"🛒 **Adicionado ao Mercado:**\n✅ {data['item']}", parse_mode="Markdown")
+                return
 
             if data.get('type') == 'consulta':
                 kind = data.get('kind'); term = data.get('term', '').lower(); res_txt = ""
@@ -649,7 +582,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V72**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V73**\n{vip_msg}\n{st}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -721,5 +654,5 @@ if __name__ == "__main__":
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V72 VISION FIX RODANDO!")
+    print("💎 V73 SHOPFIX RODANDO!")
     app.run_polling(drop_pending_updates=True)
