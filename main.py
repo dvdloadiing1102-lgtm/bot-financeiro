@@ -20,9 +20,6 @@ def install_package(package):
 try: from flask import Flask
 except ImportError: install_package("flask"); from flask import Flask
 
-try: from apscheduler.schedulers.background import BackgroundScheduler
-except ImportError: install_package("apscheduler"); from apscheduler.schedulers.background import BackgroundScheduler
-
 try:
     import matplotlib
     matplotlib.use('Agg')
@@ -58,12 +55,12 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v56_agenda.json"
+DB_FILE = "finance_v58_jobqueue.json"
 
 # ================= KEEP ALIVE =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V56 (Agenda) Online!"
+def home(): return "Bot V58 (JobQueue) Online!"
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", "10000")))
     except: pass
@@ -108,8 +105,9 @@ def load_db():
         "vip_users": {}, "vip_keys": {},
         "wallets": ["Nubank", "Itaú", "Dinheiro", "Inter", "VR/VA", "Crédito"],
         "budgets": {"Alimentação": 1000},
-        "shopping_list": [], "debts": [], "subscriptions": [], 
+        "shopping_list": [], "subscriptions": [], 
         "reminders": [],
+        "debts_v2": {}, 
         "user_level": {"xp": 0, "title": "Iniciante 🌱"},
         "config": {"persona": "padrao", "panic_mode": False, "travel_mode": False}
     }
@@ -117,6 +115,7 @@ def load_db():
     try:
         with open(DB_FILE, "r") as f: 
             data = json.load(f)
+            if "debts_v2" not in data: data["debts_v2"] = {}
             for k in default: 
                 if k not in data: data[k] = default[k]
             return data
@@ -127,23 +126,54 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SCHEDULER =================
-async def check_reminders(context):
-    now_str = get_now().strftime("%Y-%m-%d %H:%M")
-    to_remove = []
-    
-    if "reminders" in db and db["reminders"]:
-        for i, rem in enumerate(db["reminders"]):
-            if rem["time"] == now_str:
-                try:
-                    await context.bot.send_message(chat_id=rem["chat_id"], text=f"⏰ **LEMBRETE!**\n\n📌 {rem['text']}", parse_mode="Markdown")
-                    to_remove.append(i)
-                except: pass
+# ================= SISTEMA DE LEMBRETES (JOB QUEUE) =================
+async def send_reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    try:
+        # Envia a mensagem
+        await context.bot.send_message(chat_id=job.chat_id, text=f"⏰ **LEMBRETE!**\n\n📌 {job.data}", parse_mode="Markdown")
         
-        if to_remove:
-            for index in sorted(to_remove, reverse=True):
-                del db["reminders"][index]
-            save_db(db)
+        # Remove do banco de dados
+        # Nota: Isso é um pouco ineficiente em escala, mas funciona para uso pessoal
+        # Procura o lembrete exato para remover
+        global db
+        reminders_copy = db["reminders"][:]
+        for rem in reminders_copy:
+            if rem["text"] == job.data and rem["chat_id"] == job.chat_id:
+                db["reminders"].remove(rem)
+                break
+        save_db(db)
+        
+    except Exception as e:
+        print(f"Erro ao enviar lembrete: {e}")
+
+def schedule_reminder(application, chat_id, text, time_str):
+    """Agenda um lembrete no JobQueue"""
+    try:
+        target_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+        now = get_now().replace(second=0, microsecond=0) # Remove segundos para comparar limpo
+        
+        # Calcula delay em segundos
+        delay = (target_time - now).total_seconds()
+        
+        if delay < 0:
+            # Se já passou, manda agora como "Atrasado"
+            application.job_queue.run_once(send_reminder_job, 1, chat_id=chat_id, data=f"[ATRASADO] {text}")
+        else:
+            # Agenda pro futuro
+            application.job_queue.run_once(send_reminder_job, delay, chat_id=chat_id, data=text)
+            
+        return True
+    except Exception as e:
+        print(f"Erro agendamento: {e}")
+        return False
+
+def reload_reminders(application):
+    """Re-agenda tudo ao reiniciar o bot"""
+    if "reminders" in db:
+        print(f"♻️ Recarregando {len(db['reminders'])} lembretes...")
+        for rem in db["reminders"]:
+            schedule_reminder(application, rem["chat_id"], rem["text"], rem["time"])
 
 # ================= VIP =================
 def is_vip(user_id):
@@ -207,7 +237,7 @@ async def redeem_key(update, context):
     await update.message.reply_text(f"🎉 VIP até {new_d.strftime('%d/%m/%Y')}\n/start", parse_mode="Markdown")
 
 # ================= UTILS =================
-(REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME) = range(6)
+(REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
 def calc_stats():
     n = get_now(); m = n.strftime("%m/%Y")
@@ -243,6 +273,7 @@ async def smart_entry(update, context):
         f = await context.bot.get_file(msg.document.file_id); await f.download_to_drive(DB_FILE)
         global db; 
         with open(DB_FILE, "r") as fl: db = json.load(fl)
+        reload_reminders(context.application) # Recarrega lembretes ao restaurar backup
         await msg.reply_text("✅ Backup Restaurado!"); return
 
     travel = db["config"]["travel_mode"]; panic = db["config"]["panic_mode"]
@@ -258,13 +289,14 @@ async def smart_entry(update, context):
     try:
         content = []; 
         prompt = f"""
-        SISTEMA: Você é {role}. AGORA: {now_user}.
+        SISTEMA: Você é {role}. AGORA (Brasília): {now_user}.
         COTAÇÃO: Dólar={mkt['usd']}, Euro={mkt['eur']}.
         VIAGEM: {'ON' if travel else 'OFF'}.
 
         TAREFAS:
-        1. LEMBRETE: Se user pedir para lembrar algo, gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
-        2. GASTO/GANHO: Se for finanças, gere JSON: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}. Se VIAGEM=ON, converta moeda.
+        1. LEMBRETE: Se user pedir "lembrar x dia y as z horas", gere JSON: {{"type":"lembrete", "text":"descricao", "time":"YYYY-MM-DD HH:MM"}}.
+           *Importante: Use o ano atual ou seguinte. Formato 24h.*
+        2. GASTO/GANHO: Se for finanças, gere JSON: {{"type":"gasto/ganho","value":float_brl,"category":"str","description":"str","installments":1,"comment":"str"}}.
         3. CONVERSA: Texto.
         """
         content.append(prompt)
@@ -299,9 +331,14 @@ async def smart_entry(update, context):
         
         if data:
             if data.get('type') == 'lembrete':
+                # Salva no DB
                 if "reminders" not in db: db["reminders"] = []
                 db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id})
                 save_db(db)
+                
+                # Agenda no JobQueue
+                schedule_reminder(context.application, update.effective_chat.id, data['text'], data['time'])
+                
                 await wait.edit_text(f"⏰ **Agendado!**\n\n📌 {data['text']}\n📅 {data['time']}")
                 return
 
@@ -339,17 +376,16 @@ async def start(update, context):
     ind_travel = "✈️ VIAGEM" if db["config"]["travel_mode"] else ""
     st = f"{ind_panic} {ind_travel}".strip()
     
-    # ADICIONADO BOTÃO DE AGENDA AQUI
     kb_inline = [
         [InlineKeyboardButton("📂 Categorias", callback_data="menu_cats"), InlineKeyboardButton("🛒 Mercado", callback_data="menu_shop")],
-        [InlineKeyboardButton("🧾 Contas", callback_data="menu_debts"), InlineKeyboardButton("📊 Relatórios", callback_data="menu_reports")],
+        [InlineKeyboardButton("🧾 Dívidas/Pessoas", callback_data="menu_debts"), InlineKeyboardButton("📊 Relatórios", callback_data="menu_reports")],
         [InlineKeyboardButton("🎲 Roleta", callback_data="roleta"), InlineKeyboardButton("⏰ Agenda", callback_data="menu_agenda")],
         [InlineKeyboardButton("⚙️ Configs", callback_data="menu_conf"), InlineKeyboardButton("💾 Backup", callback_data="backup")]
     ]
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V56**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
+    msg = f"💎 **FINANCEIRO V58**\n{vip_msg}\n{st}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gasto:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -364,22 +400,70 @@ async def back(update, context):
     if update.callback_query: await update.callback_query.answer()
     await start(update, context)
 
-# ================= AGENDA (NOVO V56) =================
+# ================= DÍVIDAS POR PESSOA =================
+async def menu_debts(update, context):
+    query = update.callback_query; await query.answer()
+    debts = db.get("debts_v2", {})
+    txt = "🧾 **CONTROLE DE PESSOAS**\n\n"
+    kb = []
+    if not debts: txt += "_Ninguém cadastrado._"
+    else:
+        for name, val in debts.items():
+            sinal = "🔴 Deve" if val > 0 else "🟢 Crédito"
+            txt += f"👤 **{name}**: {sinal} R$ {abs(val):.2f}\n"
+            kb.append([InlineKeyboardButton(f"✏️ {name}", callback_data=f"edit_debt_{name}")])
+    kb.append([InlineKeyboardButton("➕ Adicionar Pessoa", callback_data="add_person")])
+    kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
+    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def add_person_start(update, context):
+    await update.callback_query.edit_message_text("Digite o nome da pessoa:")
+    return DEBT_NAME
+
+async def save_person_name(update, context):
+    name = update.message.text
+    if name not in db["debts_v2"]: db["debts_v2"][name] = 0.0; save_db(db); await update.message.reply_text(f"✅ {name} adicionado(a)!")
+    else: await update.message.reply_text("⚠️ Já existe.")
+    return await start(update, context)
+
+async def edit_debt_menu(update, context):
+    name = update.callback_query.data.replace("edit_debt_", "")
+    context.user_data["debt_name"] = name
+    val = db["debts_v2"].get(name, 0)
+    txt = f"👤 **{name}**\nSaldo atual: R$ {val:.2f}\n\nO que deseja fazer?"
+    kb = [[InlineKeyboardButton("➕ Emprestei (Aumentar)", callback_data="debt_add"), InlineKeyboardButton("➖ Pagou (Diminuir)", callback_data="debt_sub")],
+          [InlineKeyboardButton("🗑️ Excluir Pessoa", callback_data="debt_del"), InlineKeyboardButton("🔙 Voltar", callback_data="menu_debts")]]
+    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def debt_action(update, context):
+    action = update.callback_query.data
+    name = context.user_data["debt_name"]
+    if action == "debt_del":
+        del db["debts_v2"][name]; save_db(db); await update.callback_query.answer("Apagado!"); return await menu_debts(update, context)
+    context.user_data["debt_act"] = "add" if action == "debt_add" else "sub"
+    await update.callback_query.edit_message_text(f"Qual valor para {name}?")
+    return DEBT_VAL
+
+async def debt_save_val(update, context):
+    try:
+        val = float(update.message.text.replace(',', '.'))
+        name = context.user_data["debt_name"]
+        if context.user_data["debt_act"] == "sub": val = -val
+        db["debts_v2"][name] += val; save_db(db)
+        await update.message.reply_text(f"✅ Atualizado! Novo saldo de {name}: R$ {db['debts_v2'][name]:.2f}")
+    except: await update.message.reply_text("❌ Valor inválido.")
+    return await start(update, context)
+
+# ================= AGENDA =================
 async def menu_agenda(update, context):
     query = update.callback_query; await query.answer()
     rems = db.get("reminders", [])
     if not rems: await query.edit_message_text("📭 Sem lembretes.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]])); return
-    
     txt = "⏰ **AGENDA DE LEMBRETES:**\n\n"
-    kb = []
-    
-    # Ordena por data
-    rems.sort(key=lambda x: x['time'])
-    
+    kb = []; rems.sort(key=lambda x: x['time'])
     for i, r in enumerate(rems):
         txt += f"📅 {r['time']} - {r['text']}\n"
         kb.append([InlineKeyboardButton(f"🗑️ Apagar {r['time'].split(' ')[1]}", callback_data=f"del_agenda_{i}")])
-    
     kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -388,16 +472,12 @@ async def agenda_del(update, context):
     try:
         idx = int(query.data.replace("del_agenda_", ""))
         if 0 <= idx < len(db["reminders"]):
-            removed = db["reminders"].pop(idx)
-            save_db(db)
-            await query.answer(f"🗑️ Lembrete das {removed['time']} apagado!")
-            await menu_agenda(update, context)
-        else:
-            await query.answer("Erro ao apagar.")
-    except:
-        await query.answer("Erro.")
+            removed = db["reminders"].pop(idx); save_db(db)
+            await query.answer(f"🗑️ Lembrete apagado!"); await menu_agenda(update, context)
+        else: await query.answer("Erro.")
+    except: await query.answer("Erro.")
 
-# ================= CONFIGS & EXTRAS =================
+# ================= OUTROS MENUS =================
 async def menu_conf(update, context):
     p = "🔴 ON" if db["config"]["panic_mode"] else "🟢 OFF"
     t = "✈️ ON" if db["config"]["travel_mode"] else "🏠 OFF"
@@ -481,16 +561,13 @@ async def rep_nospend(update, context):
         if d%7==0: txt+="\n"
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
-# MANUAL
 async def reg_start(update, context): 
     if not update.callback_query: msg = await update.message.reply_text("🔄"); update.callback_query = type('obj', (object,), {'answer': lambda: None, 'edit_message_text': lambda x, reply_markup: msg.edit_text(x, reply_markup=reply_markup)})
-    query = update.callback_query
-    if hasattr(query, 'answer'): await query.answer()
+    query = update.callback_query; await query.answer()
     kb = [[InlineKeyboardButton("💸 Gasto", callback_data="reg_gasto"), InlineKeyboardButton("💰 Ganho", callback_data="reg_ganho")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return REG_TYPE
 async def reg_type(update, context):
-    query = update.callback_query
-    if hasattr(query, 'answer'): await query.answer()
+    query = update.callback_query; await query.answer()
     if query.data == "start": return await start(update, context)
     context.user_data["t"] = query.data.replace("reg_", ""); await query.edit_message_text("Valor:"); return REG_VALUE
 async def reg_val(update, context): 
@@ -505,17 +582,6 @@ async def reg_fin(update, context):
     if update.callback_query and update.callback_query.data == "skip_d": desc = context.user_data["c"]
     db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":context.user_data["t"], "value":context.user_data["v"], "category":context.user_data["c"], "description":desc, "date":get_now().strftime("%d/%m/%Y %H:%M")})
     save_db(db); await (update.message or update.callback_query.message).reply_text("✅ Salvo!"); return await start(update, context)
-
-# UTILS
-async def menu_debts(update, context):
-    d = db["debts"]; txt = "**🧾 Contas & Dívidas:**\n" + ("".join([f"{x['who']}: {x['val']}\n" for x in d]) if d else "Nenhuma.")
-    kb = [[InlineKeyboardButton("➕ Add", callback_data="add_d"), InlineKeyboardButton("🗑️ Limpar", callback_data="cl_d")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-async def add_debt_help(update, context): await update.callback_query.answer(); await update.callback_query.message.reply_text("Use: `/devo Nome 10`")
-async def debt_cmd(update, context): 
-    try: db["debts"].append({"who":context.args[0], "val":context.args[1], "type":"owe"}); save_db(db); await update.message.reply_text("Ok!")
-    except: pass
-async def cl_d(update, context): db["debts"] = []; save_db(db); await menu_debts(update, context)
 
 async def menu_cats(update, context):
     query = update.callback_query; await query.answer()
@@ -589,10 +655,8 @@ if __name__ == "__main__":
     start_keep_alive()
     app = ApplicationBuilder().token(TOKEN).build()
     
-    # Scheduler
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app])
-    scheduler.start()
+    # RELOAD JOBS
+    reload_reminders(app)
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("resgatar", redeem_key))
@@ -616,11 +680,20 @@ if __name__ == "__main__":
     
     cat_h = ConversationHandler(entry_points=[CallbackQueryHandler(c_add, pattern="^c_add")], states={CAT_ADD_TYPE:[CallbackQueryHandler(c_type)], CAT_ADD_NAME:[MessageHandler(filters.TEXT, c_save)]}, fallbacks=[CallbackQueryHandler(back, pattern="^back")])
     
-    app.add_handler(reg_h); app.add_handler(cat_h)
+    debt_h = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_person_start, pattern="^add_person"), CallbackQueryHandler(debt_action, pattern="^debt_(add|sub)")],
+        states={
+            DEBT_NAME: [MessageHandler(filters.TEXT, save_person_name)],
+            DEBT_VAL: [MessageHandler(filters.TEXT, debt_save_val)]
+        },
+        fallbacks=[CallbackQueryHandler(back, pattern="^back")]
+    )
+    
+    app.add_handler(reg_h); app.add_handler(cat_h); app.add_handler(debt_h)
 
     cbs = [("admin_panel", admin_panel), ("gen_", gen_key), ("input_key", ask_key), 
            ("menu_reports", menu_reports), ("rep_nospend", rep_nospend), ("rep_evo", rep_evo), ("rep_pdf", rep_pdf), ("rep_list", rep_list), ("rep_csv", rep_csv), ("rep_pie", rep_pie),
-           ("menu_debts", menu_debts), ("add_d", add_debt_help), ("cl_d", cl_d),
+           ("menu_debts", menu_debts), ("edit_debt_", edit_debt_menu), ("debt_", debt_action),
            ("menu_cats", menu_cats), ("c_del", c_del), ("dc_", c_kill),
            ("menu_shop", menu_shop), ("sl_c", sl_c),
            ("menu_conf", menu_conf), ("tg_panic", tg_panic), ("tg_travel", tg_travel), 
@@ -628,9 +701,9 @@ if __name__ == "__main__":
            ("backup", backup), ("undo_quick", undo_quick), ("back", back), 
            ("roleta", roleta), ("menu_subs", menu_subs), ("menu_dreams", menu_dreams),
            ("sub_add", sub_add_help), ("sub_del", sub_del_menu), ("ds_", sub_delete),
-           ("menu_agenda", menu_agenda), ("del_agenda_", agenda_del)] # CALLBACKS DA AGENDA
+           ("menu_agenda", menu_agenda), ("del_agenda_", agenda_del)]
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
-    print("💎 V56 AGENDA FIX RODANDO!")
+    print("💎 V58 SYSTEM REWRITE RODANDO!")
     app.run_polling(drop_pending_updates=True)
