@@ -17,7 +17,6 @@ def install(package):
     except ImportError:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", package])
 
-# Garante a biblioteca atualizada
 install("google-generativeai")
 for lib in ["flask", "apscheduler", "python-telegram-bot", "matplotlib", "reportlab", "python-dateutil", "requests"]:
     install(lib)
@@ -48,7 +47,7 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v88_complete.json"
+DB_FILE = "finance_v89_polished.json"
 
 # ESTADOS GLOBAIS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
@@ -56,7 +55,7 @@ DB_FILE = "finance_v88_complete.json"
 # ================= 4. SERVIDOR WEB =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V88 Complete Online!"
+def home(): return "Bot V89 Online!"
 
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -99,20 +98,19 @@ def save_db(data):
 
 db = load_db()
 
-# ================= 6. IA SETUP (SISTEMA DE FALLBACK AUTOMÁTICO) =================
+# ================= 6. IA SETUP (FALLBACK AUTOMÁTICO) =================
 model_ai = None
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # Tenta conectar no modelo novo. Se der 404, cai pro antigo.
     try:
+        # Tenta conectar no modelo novo
         test_model = genai.GenerativeModel('gemini-1.5-flash')
-        # Tenta gerar algo simples pra ver se não dá erro
         test_model.generate_content("test")
         model_ai = test_model
         print("✅ IA Conectada: gemini-1.5-flash")
-    except Exception as e:
-        print(f"⚠️ Erro no Flash ({e}), mudando para PRO...")
+    except Exception:
         try:
+            # Fallback para o modelo clássico se der erro
             model_ai = genai.GenerativeModel('gemini-pro')
             print("✅ IA Conectada: gemini-pro (Fallback)")
         except:
@@ -147,7 +145,7 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# ================= 7. TODAS AS FUNÇÕES (RESTAURADAS) =================
+# ================= 7. TODAS AS FUNÇÕES (ORDENADAS) =================
 
 async def start(update, context):
     context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
@@ -163,7 +161,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V88**\n{msg_vip}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V89**\n{msg_vip}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -347,7 +345,7 @@ async def rep_pdf(update, context):
     c.drawString(50, 730, "-"*60); y = 700
     for t in reversed(db["transactions"][-40:]):
         if y < 50: break
-        c.drawString(50, y, f"{t['date']} | {t['type']} | R$ {t['value']:.2f} | {t['category']} | {t['description']}")
+        c.drawString(50, y, f"{t['date']} | {t['type'].upper()} | R$ {t['value']:.2f} | {t['category']} | {t['description']}")
         y -= 15
     c.save()
     with open("relatorio.pdf", "rb") as f: await query.message.reply_document(f)
@@ -426,7 +424,7 @@ async def tg_travel(update, context): db["config"]["travel_mode"] = not db["conf
 async def menu_shop(update, context):
     l = db["shopping_list"]; txt = "**🛒 Mercado:**\n" + ("_Vazio_" if not l else "\n".join([f"• {i}" for i in l]))
     kb = [[InlineKeyboardButton("🗑️ Limpar", callback_data="sl_c")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await update.callback_query.edit_message_text(txt + "\n\n🗣️ *Dica: Fale 'Adicionar leite na lista'*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def sl_c(update, context): db["shopping_list"] = []; save_db(db); await start(update, context)
 
 async def menu_persona(update, context):
@@ -476,7 +474,7 @@ async def menu_help(update, context):
     kb = [[InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-# --- SCHEDULER (ATIVADO DE VOLTA) ---
+# --- SCHEDULER ---
 async def check_reminders(context):
     now_str = get_now().strftime("%Y-%m-%d %H:%M")
     to_remove = []
@@ -579,7 +577,7 @@ async def smart_entry(update, context):
         else: await wait.edit_text(t)
     except Exception as e: await wait.edit_text(f"⚠️ Erro IA: {e}")
 
-# ================= 8. MAIN (TUDO CONECTADO) =================
+# ================= 8. MAIN =================
 def main():
     print("🚀 Bot V88 Iniciando...")
     start_keep_alive()
@@ -596,7 +594,7 @@ def main():
     app.add_handler(CommandHandler("sonho", dream_cmd))
     app.add_handler(CommandHandler("sub", sub_cmd))
     
-    # Handlers Complexos
+    # Handlers Complexos (SEM PER_MESSAGE QUE CAUSAVA AVISO)
     reg_h = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(reg_start, pattern="^start_reg"),
@@ -611,15 +609,13 @@ def main():
             REG_CAT:[CallbackQueryHandler(reg_cat)], 
             REG_DESC:[MessageHandler(filters.TEXT & ~filters.COMMAND, reg_fin), CallbackQueryHandler(reg_fin, pattern="^skip_d")]
         }, 
-        fallbacks=[CommandHandler("cancel", cancel_op), CommandHandler("start", start), CallbackQueryHandler(back, pattern="^back")],
-        per_message=True
+        fallbacks=[CommandHandler("cancel", cancel_op), CommandHandler("start", start), CallbackQueryHandler(back, pattern="^back")]
     )
     
     cat_h = ConversationHandler(
         entry_points=[CallbackQueryHandler(c_add, pattern="^c_add")], 
         states={CAT_ADD_TYPE:[CallbackQueryHandler(c_type)], CAT_ADD_NAME:[MessageHandler(filters.TEXT, c_save)]}, 
-        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(back, pattern="^back")],
-        per_message=True
+        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(back, pattern="^back")]
     )
     
     debt_h = ConversationHandler(
@@ -628,8 +624,7 @@ def main():
             DEBT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_person_name)],
             DEBT_VAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, debt_save_val)]
         },
-        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(back, pattern="^back")],
-        per_message=True
+        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(back, pattern="^back")]
     )
     
     app.add_handler(reg_h); app.add_handler(cat_h); app.add_handler(debt_h)
@@ -654,7 +649,7 @@ def main():
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
     
-    print("✅ V88 RESTORED & ONLINE!")
+    print("✅ V88 COMPLETE ONLINE!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
