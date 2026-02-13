@@ -1,47 +1,63 @@
 import os
 import sys
 import subprocess
+import time
 import logging
 import threading
 import json
 import uuid
-import time
-import io
 import math
 import random
 from datetime import datetime, timedelta
 
-# ================= 1. FORÇAR AMBIENTE CORRETO (CRUCIAL PARA ÁUDIO) =================
-def force_install():
+# ================= 1. SISTEMA DE AUTO-REPARO E REINÍCIO =================
+def install_and_restart():
+    print("🔧 REPARANDO AMBIENTE: Instalando bibliotecas faltantes...")
+    required = [
+        "flask", 
+        "apscheduler", 
+        "python-telegram-bot", 
+        "google-generativeai>=0.7.2", 
+        "matplotlib", 
+        "reportlab", 
+        "python-dateutil", 
+        "requests"
+    ]
     try:
-        import google.generativeai as genai
-        # Verifica se a versão suporta áudio (precisa ser > 0.7.0)
-        ver = getattr(genai, '__version__', '0.0.0')
-        if ver < '0.7.0': raise ImportError
-    except ImportError:
-        print("🔄 Atualizando bibliotecas para suportar ÁUDIO...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "google-generativeai>=0.7.2"])
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "flask", "apscheduler", "python-telegram-bot", "matplotlib", "reportlab", "requests"])
+        # Força a instalação no usuário atual
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade"] + required)
+        print("✅ Instalação completa! REINICIANDO O PROCESSO...")
+        time.sleep(2)
+        # Reinicia o script do zero para carregar as novas bibliotecas
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        print(f"❌ Falha fatal na instalação: {e}")
+        sys.exit(1)
 
-force_install()
+# Tenta importar. Se falhar, aciona o instalador e reinicia.
+try:
+    from flask import Flask
+    import requests
+    from apscheduler.schedulers.background import BackgroundScheduler
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    from dateutil.relativedelta import relativedelta
+    import google.generativeai as genai
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+    from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, ConversationHandler, filters
+except ImportError:
+    install_and_restart()
 
-# ================= 2. IMPORTAÇÕES =================
-from flask import Flask
-import requests
-from apscheduler.schedulers.background import BackgroundScheduler
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from dateutil.relativedelta import relativedelta
-import google.generativeai as genai
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, ConversationHandler, filters
-
-# ================= 3. CONFIGURAÇÃO =================
+# ================= 2. CONFIGURAÇÃO GERAL =================
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Suprime avisos chatos do Google
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
@@ -51,23 +67,28 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v91_audio.json"
+DB_FILE = "finance_v92.json"
 
 # ESTADOS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
-# ================= 4. IA SETUP (COM SUPORTE A ÁUDIO) =================
+# ================= 3. IA SETUP (COM SUPORTE A ÁUDIO) =================
 model_ai = None
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
     try:
-        # Gemini 1.5 Flash é o modelo que tem ÁUDIO e ALTA COTA
+        # Tenta o modelo Flash 1.5 (Rápido + Áudio + Cota Alta)
         model_ai = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ IA Conectada: gemini-1.5-flash (Áudio ON)")
-    except Exception as e:
-        print(f"❌ Erro IA: {e}")
+        print("✅ IA David: gemini-1.5-flash Conectado!")
+    except:
+        try:
+            # Fallback para o Pro
+            model_ai = genai.GenerativeModel('gemini-pro')
+            print("⚠️ IA Fallback: gemini-pro (Sem áudio)")
+        except:
+            model_ai = None
 
-# ================= 5. BANCO DE DADOS =================
+# ================= 4. BANCO DE DADOS =================
 def load_db():
     default = {
         "transactions": [], 
@@ -86,7 +107,7 @@ def save_db(data):
 
 db = load_db()
 
-# ================= 6. UTILS =================
+# ================= 5. UTILS =================
 def get_now(): return datetime.utcnow() - timedelta(hours=3)
 
 def calc_stats():
@@ -111,7 +132,7 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# ================= 7. FLUXO E MENUS =================
+# ================= 6. INTERFACE =================
 
 async def start(update, context):
     context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
@@ -127,7 +148,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V91 (ÁUDIO ON)**\n{msg_vip}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V92 (AUTO-FIX)**\n{msg_vip}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -156,7 +177,7 @@ async def manual_ganho_trigger(update, context):
     context.user_data["t"] = "ganho"
     await update.message.reply_text("💰 Valor?"); return REG_VALUE
 async def reg_start(update, context):
-    await start(update, context); return REG_TYPE # Placeholder fix
+    await start(update, context); return REG_TYPE
 async def reg_type(update, context):
     context.user_data["t"] = update.callback_query.data.replace("reg_", ""); await update.callback_query.edit_message_text("Valor:"); return REG_VALUE
 async def reg_val(update, context): 
@@ -202,21 +223,21 @@ async def menu_shop(update, context):
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def sl_c(update, context): db["shopping_list"] = []; save_db(db); await start(update, context)
 
-# --- PLACEHOLDERS DOS OUTROS MENUS (TODOS FUNCIONAM) ---
-async def menu_reports(update, context): await update.callback_query.edit_message_text("Relatórios (Use botões abaixo)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🔙", callback_data="back")]]))
+# --- PLACEHOLDERS ---
+async def menu_reports(update, context): await update.callback_query.edit_message_text("Relatórios (Botões abaixo)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🔙", callback_data="back")]]))
 async def rep_list(update, context):
     tr = db["transactions"][-10:]; txt = "\n".join([f"{t['type']} {t['value']}" for t in tr])
     await update.callback_query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def menu_agenda(update, context): await update.callback_query.edit_message_text("Agenda Vazia", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def menu_cats(update, context): await update.callback_query.edit_message_text("Categorias", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def menu_conf(update, context): await update.callback_query.edit_message_text("Configs", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def roleta(update, context): await update.callback_query.edit_message_text("🎲 Girando...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def menu_help(update, context): await update.callback_query.edit_message_text("Ajuda", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+async def roleta(update, context): await update.callback_query.edit_message_text("🎲 Girando... COMPRA!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+async def menu_help(update, context): await update.callback_query.edit_message_text("Manual: Fale 'Gastei 10' ou 'Mercado leite'.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def backup(update, context): 
     with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def gen_key(update, context): pass # Simplificado
-async def ask_key(update, context): pass 
+async def gen_key(update, context): pass
+async def ask_key(update, context): pass
 async def redeem_key(update, context): pass
 async def menu_manage_trans(update, context): pass
 async def delete_transaction_confirm(update, context): pass
@@ -243,11 +264,11 @@ async def c_save(update, context): pass
 async def c_del(update, context): pass
 async def c_kill(update, context): pass
 
-# --- IA HANDLER (ÁUDIO FUNCIONANDO) ---
+# --- IA HANDLER ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
-    msg = update.message; wait = await msg.reply_text("🎧 Ouvindo..."); now = get_now()
+    msg = update.message; wait = await msg.reply_text("🎧 Processando..."); now = get_now()
     
     try:
         prompt = f"""AGORA: {now}. Responda APENAS JSON.
@@ -258,25 +279,23 @@ async def smart_entry(update, context):
         content = [prompt]
         
         if msg.voice or msg.audio:
-            # PROCESSO DE ÁUDIO CORRETO
-            fid = (msg.voice or msg.audio).file_id
-            f_obj = await context.bot.get_file(fid)
-            # Salva temporariamente
-            f_path = f"audio_{uuid.uuid4()}.ogg"
-            await f_obj.download_to_drive(f_path)
-            
-            # Upload para o Gemini (API Nova)
-            myfile = genai.upload_file(f_path)
-            while myfile.state.name == "PROCESSING": time.sleep(1); myfile = genai.get_file(myfile.name)
-            
-            content.append(myfile)
-            content.append("Transcreva e execute o comando deste áudio.")
+            try:
+                fid = (msg.voice or msg.audio).file_id
+                f_obj = await context.bot.get_file(fid)
+                f_path = f"audio_{uuid.uuid4()}.ogg"
+                await f_obj.download_to_drive(f_path)
+                
+                # Upload Gemini
+                myfile = genai.upload_file(f_path)
+                while myfile.state.name == "PROCESSING": time.sleep(1); myfile = genai.get_file(myfile.name)
+                content.append(myfile)
+            except:
+                await wait.edit_text("⚠️ Erro no áudio. Tente texto.")
+                return
         
         elif msg.photo:
             f = await context.bot.get_file(msg.photo[-1].file_id); d = await f.download_as_bytearray()
             content.append({"mime_type": "image/jpeg", "data": bytes(d)})
-            content.append("Analise esta imagem.")
-        
         else:
             content.append(f"User: {msg.text}")
             
@@ -284,8 +303,8 @@ async def smart_entry(update, context):
         t = resp.text; data = None
         if "{" in t: data = json.loads(t[t.find("{"):t.rfind("}")+1])
         
-        # Limpeza
-        if 'f_path' in locals(): os.remove(f_path)
+        # Limpa arquivo de audio se existir
+        if 'f_path' in locals() and os.path.exists(f_path): os.remove(f_path)
         
         if data:
             if data.get('type') == 'mercado':
@@ -299,12 +318,12 @@ async def smart_entry(update, context):
         await wait.edit_text(t)
     except Exception as e: await wait.edit_text(f"⚠️ Erro: {str(e)[:100]}")
 
-# ================= 8. MAIN =================
+# ================= 9. MAIN =================
 def main():
-    print("🚀 Iniciando Bot V91...")
+    print("🚀 Iniciando Bot V92...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "Bot V91 Online"
+    def home(): return "Bot V92 Online"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -340,7 +359,7 @@ def main():
     scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V91 AUDIO RESTORED!")
+    print("✅ V92 NO AR!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
