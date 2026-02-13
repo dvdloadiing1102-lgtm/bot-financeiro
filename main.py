@@ -48,7 +48,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v93.json"
+DB_FILE = "finance_v94.json"
 
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
@@ -82,7 +82,7 @@ def save_db(data):
 
 db = load_db()
 
-# ================= 5. UTILS & SCHEDULER (CORRIGIDO) =================
+# ================= 5. UTILS & SCHEDULER =================
 def get_now(): return datetime.utcnow() - timedelta(hours=3)
 
 def calc_stats():
@@ -104,7 +104,6 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# --- A FUNÇÃO QUE FALTAVA ---
 async def check_reminders(context):
     now_str = get_now().strftime("%Y-%m-%d %H:%M")
     to_remove = []
@@ -131,7 +130,7 @@ async def start(update, context):
     ]
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
-    msg = f"💎 **FINANCEIRO V93**\n{msg_vip}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V94**\n{msg_vip}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -167,7 +166,7 @@ async def reg_fin(update, context):
     db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":context.user_data["t"], "value":context.user_data["v"], "category":context.user_data["c"], "description":desc, "date":get_now().strftime("%d/%m/%Y %H:%M")})
     save_db(db); await update.message.reply_text("✅ Salvo!"); return await start(update, context)
 
-# --- OUTROS MENUS ---
+# --- DÍVIDAS ---
 async def menu_debts(update, context):
     debts = db.get("debts_v2", {}); txt = "🧾 **DÍVIDAS:**\n"; kb = []
     for n, v in debts.items(): kb.append([InlineKeyboardButton(f"✏️ {n}: {v:.2f}", callback_data=f"ed_{n}")])
@@ -194,16 +193,35 @@ async def menu_shop(update, context):
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def sl_c(update, context): db["shopping_list"] = []; save_db(db); await start(update, context)
 
-# --- PLACEHOLDERS ---
-async def menu_reports(update, context): await update.callback_query.edit_message_text("Relatórios (Botões abaixo)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🔙", callback_data="back")]]))
-async def rep_list(update, context): tr = db["transactions"][-10:]; txt = "\n".join([f"{t['type']} {t['value']}" for t in tr]); await update.callback_query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def menu_agenda(update, context): await update.callback_query.edit_message_text("Agenda (Use IA)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def menu_cats(update, context): await update.callback_query.edit_message_text("Categorias", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def menu_conf(update, context): await update.callback_query.edit_message_text("Configs", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def roleta(update, context): await update.callback_query.edit_message_text("🎲 Girando... COMPRA!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def menu_help(update, context): await update.callback_query.edit_message_text("Manual: Fale 'Gastei 10' ou 'Mercado leite'.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-async def backup(update, context): with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
-async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+# --- OUTROS MENUS (INDENTADOS CORRETAMENTE) ---
+async def menu_reports(update, context): 
+    await update.callback_query.edit_message_text("Relatórios (Botões abaixo)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🔙", callback_data="back")]]))
+
+async def rep_list(update, context): 
+    tr = db["transactions"][-10:]; txt = "\n".join([f"{t['type']} {t['value']}" for t in tr]); await update.callback_query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+
+async def menu_agenda(update, context): 
+    await update.callback_query.edit_message_text("Agenda (Use IA)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+
+async def menu_cats(update, context): 
+    await update.callback_query.edit_message_text("Categorias", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+
+async def menu_conf(update, context): 
+    await update.callback_query.edit_message_text("Configs", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+
+async def roleta(update, context): 
+    await update.callback_query.edit_message_text("🎲 Girando... COMPRA!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+
+async def menu_help(update, context): 
+    await update.callback_query.edit_message_text("Manual: Fale 'Gastei 10' ou 'Mercado leite'.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+
+async def backup(update, context): 
+    with open(DB_FILE, "rb") as f:
+        await update.callback_query.message.reply_document(f)
+
+async def admin_panel(update, context): 
+    await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+
 async def gen_key(update, context): pass
 async def ask_key(update, context): pass
 async def redeem_key(update, context): pass
@@ -265,12 +283,12 @@ async def smart_entry(update, context):
         await wait.edit_text(t)
     except Exception as e: await wait.edit_text(f"⚠️ Erro: {str(e)[:100]}")
 
-# ================= 7. MAIN =================
+# ================= 9. MAIN =================
 def main():
-    print("🚀 Iniciando Bot V93...")
+    print("🚀 Iniciando Bot V94...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "Bot V93 Online"
+    def home(): return "Bot V94 Online"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -306,7 +324,7 @@ def main():
     scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V93 NO AR!")
+    print("✅ V94 NO AR!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
