@@ -10,18 +10,14 @@ import math
 import random
 from datetime import datetime, timedelta
 
-# ================= 1. AUTO-REPARO E INSTALAÇÃO =================
+# ================= 1. AUTO-REPARO =================
 def install_and_restart():
-    print("🔧 REPARANDO AMBIENTE COMPLETO...")
     required = ["flask", "apscheduler", "python-telegram-bot", "google-generativeai>=0.7.2", "matplotlib", "reportlab", "python-dateutil", "requests"]
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade"] + required)
-        print("✅ Instalação concluída! REINICIANDO...")
         time.sleep(2)
         os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception as e:
-        print(f"❌ Falha fatal: {e}")
-        sys.exit(1)
+    except: sys.exit(1)
 
 try:
     from flask import Flask
@@ -48,39 +44,42 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v98.json"
+DB_FILE = "finance_v99.json"
 
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
-# ================= 3. IA SETUP (FORÇA BRUTA) =================
+# ================= 3. IA SETUP (AUTO-DISCOVERY - SEM ERRO 404) =================
 model_ai = None
-ACTIVE_MODEL_NAME = "nenhum"
+MODEL_STATUS = "IA OFF"
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # Lista de tentativas para vencer o erro 404
-    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
-    
-    for m in models_to_try:
-        try:
-            print(f"🧪 Testando modelo: {m}...")
-            test_model = genai.GenerativeModel(m)
-            test_model.generate_content("Oi") # Teste real
-            model_ai = test_model
-            ACTIVE_MODEL_NAME = m
-            print(f"✅ CONECTADO NO MODELO: {m}")
-            break
-        except Exception as e:
-            print(f"⚠️ Falha no {m}: {e}")
-            continue
+    try:
+        # Pergunta ao Google o que temos disponivel
+        all_models = list(genai.list_models())
+        # Filtra apenas os que geram texto
+        valid_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
+        
+        if valid_models:
+            # Tenta pegar o Flash ou Pro, se não, pega o primeiro da lista
+            chosen = next((m for m in valid_models if 'flash' in m), next((m for m in valid_models if 'pro' in m), valid_models[0]))
+            model_ai = genai.GenerativeModel(chosen)
+            MODEL_STATUS = f"Conectado: {chosen}"
+            print(f"✅ {MODEL_STATUS}")
+        else:
+            print("⚠️ Nenhum modelo disponível na conta.")
+    except Exception as e:
+        print(f"❌ Erro ao listar modelos: {e}")
+        # Fallback desesperado
+        try: model_ai = genai.GenerativeModel('gemini-pro')
+        except: pass
 
 # ================= 4. BANCO DE DADOS =================
 def load_db():
     default = {
-        "transactions": [], 
+        "transactions": [], "shopping_list": [], "debts_v2": {},
         "categories": {"ganho": ["Salário", "Extra"], "gasto": ["Alimentação", "Transporte", "Lazer", "Mercado", "Casa"]},
-        "vip_users": {}, "shopping_list": [], "subscriptions": [], "reminders": [], "debts_v2": {}, 
-        "config": {"persona": "padrao", "panic_mode": False, "travel_mode": False}
+        "vip_users": {}, "config": {"panic_mode": False}, "reminders": [], "subscriptions": []
     }
     if not os.path.exists(DB_FILE): return default
     try:
@@ -141,12 +140,12 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V98**\n{msg_vip} | IA: {ACTIVE_MODEL_NAME}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V99**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
         await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(kb_reply, resize_keyboard=True), parse_mode="Markdown")
-        await update.message.reply_text("⚙️ **Menu Completo:**", reply_markup=InlineKeyboardMarkup(kb_inline))
+        await update.message.reply_text("⚙️ **Menu:**", reply_markup=InlineKeyboardMarkup(kb_inline))
     return ConversationHandler.END
 
 async def back(update, context): 
@@ -204,10 +203,9 @@ async def menu_shop(update, context):
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def sl_c(update, context): db["shopping_list"] = []; save_db(db); await start(update, context)
 
-# --- RELATÓRIOS COMPLETOS ---
+# --- RELATÓRIOS ---
 async def menu_reports(update, context): await update.callback_query.edit_message_text("Relatórios:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie")], [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend")], [InlineKeyboardButton("🔙", callback_data="back")]]))
 async def rep_list(update, context): tr = db["transactions"][-10:]; txt = "\n".join([f"{t['type']} {t['value']} ({t['category']})" for t in tr]); await update.callback_query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
-
 async def rep_pie(update, context):
     await update.callback_query.answer("Gerando...")
     cats = {}; m = get_now().strftime("%m/%Y")
@@ -215,37 +213,30 @@ async def rep_pie(update, context):
         if t['type'] == 'gasto' and m in t['date']: cats[t['category']] = cats.get(t['category'], 0) + t['value']
     if not cats: await update.callback_query.message.reply_text("Sem dados."); return
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=COLORS)
-    ax.legend(cats.keys(), loc="best", bbox_to_anchor=(1, 0.5)); ax.set_title(f"Gastos {m}", color='white')
-    buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0); plt.close()
+    ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=['#ff9999','#66b3ff','#99ff99','#ffcc99'])
+    ax.legend(cats.keys(), loc="best"); ax.set_title(f"Gastos {m}", color='white')
+    buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close()
     await update.callback_query.message.reply_photo(buf)
-
 async def rep_pdf(update, context):
-    await update.callback_query.answer("Gerando PDF...")
-    c = canvas.Canvas("relatorio.pdf", pagesize=letter); c.drawString(50, 750, "EXTRATO FINANCEIRO"); y = 700
+    c = canvas.Canvas("relatorio.pdf", pagesize=letter); c.drawString(50, 750, "EXTRATO"); y = 700
     for t in reversed(db["transactions"][-40:]):
+        c.drawString(50, y, f"{t['date']} | {t['type']} | R$ {t['value']:.2f}"); y -= 15
         if y < 50: break
-        c.drawString(50, y, f"{t['date']} | {t['type']} | R$ {t['value']:.2f} | {t['category']}"); y -= 15
     c.save()
     with open("relatorio.pdf", "rb") as f: await update.callback_query.message.reply_document(f)
-
 async def rep_nospend(update, context):
     m = get_now().strftime("%m/%Y"); dg = {int(t['date'][:2]) for t in db["transactions"] if t['type']=='gasto' and m in t['date']}
-    txt = f"📅 **Mapa {m}**\n` D S T Q Q S S`\n"
-    for d in range(1, 32): 
-        if d > get_now().day: break 
-        txt += f"{'🔴' if d in dg else '🟢'} "; 
-        if d%7==0: txt+="\n"
+    txt = f"📅 **Mapa {m}**\n` D S T Q Q S S`\n"; 
+    for d in range(1, 32): txt += f"{'🔴' if d in dg else '🟢'} "; txt+= "\n" if d%7==0 else ""
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
 
-# --- CATEGORIAS & CONFIGS ---
+# --- MENUS DE SUPORTE RESTAURADOS ---
 async def menu_cats(update, context):
     kb = [[InlineKeyboardButton("➕ Criar", callback_data="c_add"), InlineKeyboardButton("❌ Del", callback_data="c_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text("Categorias:", reply_markup=InlineKeyboardMarkup(kb))
 async def c_add(update, context): kb = [[InlineKeyboardButton("Gasto", callback_data="nc_gasto"), InlineKeyboardButton("Ganho", callback_data="nc_ganho")]]; await update.callback_query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup(kb)); return CAT_ADD_TYPE
 async def c_type(update, context): context.user_data["nt"] = update.callback_query.data.replace("nc_", ""); await update.callback_query.edit_message_text("Nome:"); return CAT_ADD_NAME
-async def c_save(update, context): 
-    t = context.user_data["nt"]; n = update.message.text; db["categories"][t].append(n); save_db(db); await update.message.reply_text("Criada!"); return await start(update, context)
+async def c_save(update, context): t = context.user_data["nt"]; n = update.message.text; db["categories"][t].append(n); save_db(db); await update.message.reply_text("Criada!"); return await start(update, context)
 async def c_del(update, context):
     kb = []; [kb.append([InlineKeyboardButton(c, callback_data=f"kc_gasto_{c}")]) for c in db["categories"]["gasto"]]
     kb.append([InlineKeyboardButton("🔙", callback_data="back")]); await update.callback_query.edit_message_text("Apagar:", reply_markup=InlineKeyboardMarkup(kb))
@@ -253,14 +244,11 @@ async def c_kill(update, context):
     _, t, n = update.callback_query.data.split("_"); db["categories"][t].remove(n); save_db(db); await update.callback_query.edit_message_text("Apagada!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 
 async def menu_conf(update, context):
-    p = "🔴" if db["config"]["panic_mode"] else "🟢"; t = "✈️" if db["config"]["travel_mode"] else "🏠"
-    kb = [[InlineKeyboardButton(f"Pânico: {p}", callback_data="tg_panic"), InlineKeyboardButton(f"Viagem: {t}", callback_data="tg_travel")],
-          [InlineKeyboardButton("🔔 Assinaturas", callback_data="menu_subs"), InlineKeyboardButton("🔙", callback_data="back")]]
-    await update.callback_query.edit_message_text("⚙️ **Configurações:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    p = "🔴" if db["config"]["panic_mode"] else "🟢"; 
+    kb = [[InlineKeyboardButton(f"Pânico: {p}", callback_data="tg_panic")], [InlineKeyboardButton("🔔 Assinaturas", callback_data="menu_subs"), InlineKeyboardButton("🔙", callback_data="back")]]
+    await update.callback_query.edit_message_text("Configs:", reply_markup=InlineKeyboardMarkup(kb))
 async def tg_panic(update, context): db["config"]["panic_mode"] = not db["config"]["panic_mode"]; save_db(db); await menu_conf(update, context)
-async def tg_travel(update, context): db["config"]["travel_mode"] = not db["config"]["travel_mode"]; save_db(db); await menu_conf(update, context)
 
-# --- EXTRAS (ROLETA, AGENDA, SUBS) ---
 async def roleta(update, context):
     res = "😈 **COMPRA!**" if random.random() > 0.5 else "😇 **NÃO COMPRA!**"
     kb = [[InlineKeyboardButton("🔄 Girar", callback_data="roleta")], [InlineKeyboardButton("🔙", callback_data="back")]]
@@ -274,34 +262,32 @@ async def agenda_del(update, context): db["reminders"] = []; save_db(db); await 
 
 async def menu_subs(update, context):
     subs = db.get("subscriptions", []); txt = f"🔔 **ASSINATURAS**\nTotal: **R$ {sum(float(s['val']) for s in subs):.2f}**"
-    kb = [[InlineKeyboardButton("➕ Add", callback_data="sub_add"), InlineKeyboardButton("🗑️ Del", callback_data="sub_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    kb = [[InlineKeyboardButton("➕ Add (/sub)", callback_data="sub_add"), InlineKeyboardButton("🗑️ Del", callback_data="sub_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def sub_add_help(update, context): await update.callback_query.answer(); await update.callback_query.message.reply_text("Use:\n`/sub Netflix 55.90 15`")
 async def sub_cmd(update, context):
     try: n, v, d = context.args[0], float(context.args[1].replace(',', '.')), int(context.args[2]); db["subscriptions"].append({"name": n, "val": v, "day": d}); save_db(db); await update.message.reply_text("✅ Salvo!")
-    except: await update.message.reply_text("❌ Erro. Use: `/sub Nome Valor Dia`")
-async def sub_del_menu(update, context): await update.callback_query.answer("Em breve") # Simplificado
+    except: await update.message.reply_text("Erro. Use: `/sub Nome Valor Dia`")
+async def sub_del_menu(update, context): db["subscriptions"] = []; save_db(db); await menu_subs(update, context)
 
-async def menu_help(update, context): await update.callback_query.edit_message_text("Manual: Fale 'Gastei 10' ou 'Mercado leite'.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+async def dream_cmd(update, context):
+    try: v = float(context.args[-1]); await update.message.reply_text(f"🛌 Meta: R$ {v}")
+    except: pass
+
+async def menu_help(update, context): await update.callback_query.edit_message_text("Fale 'Gastei 10' ou 'Mercado leite'.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def backup(update, context): 
     with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def gen_key(update, context): pass
 async def ask_key(update, context): pass
 async def redeem_key(update, context): pass
-async def menu_manage_trans(update, context): pass
 
-# --- IA HANDLER (COM ÁUDIO SE O MODELO PERMITIR) ---
+# --- IA HANDLER ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
-    msg = update.message; wait = await msg.reply_text("🎧..."); now = get_now()
+    msg = update.message; wait = await msg.reply_text("🧠..."); now = get_now()
     
-    # Se caiu no modelo PRO (que não tem audio) e o user mandou audio
-    if "pro" in ACTIVE_MODEL_NAME and (msg.voice or msg.audio):
-        await wait.edit_text("⚠️ **Áudio indisponível neste servidor.**\nPor favor, digite (ex: 'Comprar leite').\n_(O Google bloqueou o modelo de áudio nesta região/conta)_")
-        return
-
     try:
         prompt = f"""AGORA: {now}. Responda APENAS JSON.
         Se usuário diz 'comprar leite' ou 'põe pão na lista': {{"type":"mercado", "item":"leite"}}.
@@ -335,10 +321,10 @@ async def smart_entry(update, context):
 
 # ================= 9. MAIN =================
 def main():
-    print("🚀 Iniciando Bot V98...")
+    print("🚀 Iniciando Bot V99...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "Bot V98 Online"
+    def home(): return "Bot V99 Online"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -366,7 +352,7 @@ def main():
            ("menu_reports", menu_reports), ("rep_list", rep_list), ("rep_pie", rep_pie), ("rep_pdf", rep_pdf), ("rep_nospend", rep_nospend),
            ("menu_agenda", menu_agenda), ("del_agenda_all", agenda_del),
            ("menu_cats", menu_cats), ("c_del", c_del), ("kc_", c_kill),
-           ("menu_conf", menu_conf), ("tg_panic", tg_panic), ("tg_travel", tg_travel), ("menu_subs", menu_subs), ("sub_add", sub_add_help), ("sub_del", sub_del_menu),
+           ("menu_conf", menu_conf), ("tg_panic", tg_panic), ("menu_subs", menu_subs), ("sub_add", sub_add_help), ("sub_del", sub_del_menu),
            ("roleta", roleta), ("menu_help", menu_help), ("backup", backup), ("admin_panel", admin_panel), ("undo_quick", undo_quick),
            ("ed_", edit_debt_menu), ("da_", debt_action), ("sc_", reg_cat)]
     
@@ -378,7 +364,7 @@ def main():
     scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V98 FULL RESTORED & ONLINE!")
+    print("✅ V99 ONLINE - MODELO: " + MODEL_STATUS)
     app_bot.run_polling()
 
 if __name__ == "__main__":
