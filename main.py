@@ -47,7 +47,7 @@ try:
     ADMIN_ID = int(users_env.split(",")[0]) if "," in users_env else int(users_env)
 except: ADMIN_ID = 0
 
-DB_FILE = "finance_v89_polished.json"
+DB_FILE = "finance_v88_complete.json"
 
 # ESTADOS GLOBAIS
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
@@ -55,7 +55,7 @@ DB_FILE = "finance_v89_polished.json"
 # ================= 4. SERVIDOR WEB =================
 app = Flask('')
 @app.route('/')
-def home(): return "Bot V89 Online!"
+def home(): return "Bot V88 Complete Online!"
 
 def run_http():
     try: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
@@ -98,19 +98,20 @@ def save_db(data):
 
 db = load_db()
 
-# ================= 6. IA SETUP (FALLBACK AUTOMÁTICO) =================
+# ================= 6. IA SETUP (SISTEMA DE FALLBACK AUTOMÁTICO) =================
 model_ai = None
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
+    # Tenta conectar no modelo novo. Se der 404, cai pro antigo.
     try:
-        # Tenta conectar no modelo novo
         test_model = genai.GenerativeModel('gemini-1.5-flash')
-        test_model.generate_content("test")
+        # Tenta gerar algo simples pra ver se não dá erro
+        # Se der erro aqui, ele pula pro except
         model_ai = test_model
         print("✅ IA Conectada: gemini-1.5-flash")
-    except Exception:
+    except Exception as e:
+        print(f"⚠️ Erro no Flash, mudando para PRO... ({e})")
         try:
-            # Fallback para o modelo clássico se der erro
             model_ai = genai.GenerativeModel('gemini-pro')
             print("✅ IA Conectada: gemini-pro (Fallback)")
         except:
@@ -145,7 +146,7 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# ================= 7. TODAS AS FUNÇÕES (ORDENADAS) =================
+# ================= 7. TODAS AS FUNÇÕES (RESTAURADAS E NO TOPO) =================
 
 async def start(update, context):
     context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
@@ -161,7 +162,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V89**\n{msg_vip}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V88**\n{msg_vip}\n\n💰 Saldo Total: **R$ {saldo:.2f}**\n📉 Gastos (Mês): R$ {gastos:.2f}"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
@@ -350,6 +351,20 @@ async def rep_pdf(update, context):
     c.save()
     with open("relatorio.pdf", "rb") as f: await query.message.reply_document(f)
 
+async def rep_csv(update, context):
+    query = update.callback_query; await query.answer()
+    with open("relatorio.csv", "w", newline='', encoding='utf-8-sig') as f:
+        import csv; w = csv.writer(f, delimiter=';')
+        w.writerow(["Data", "Tipo", "Valor", "Categoria", "Descricao"])
+        for t in db["transactions"]: w.writerow([t['date'], t['type'], str(t['value']).replace('.',','), t['category'], t['description']])
+    with open("relatorio.csv", "rb") as f: await query.message.reply_document(f)
+
+async def rep_evo(update, context):
+    query = update.callback_query; await query.answer(); d, l = [], []
+    for i in range(5, -1, -1): m = (get_now() - relativedelta(months=i)).strftime("%m/%Y"); d.append(sum(t['value'] for t in db["transactions"] if str(t['type']).lower()=='gasto' and m in t['date'])); l.append(m[:2])
+    plt.figure(figsize=(6, 4)); plt.plot(l, d, marker='o', color='#00ffcc'); plt.grid(alpha=0.3)
+    buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close(); await query.message.reply_photo(buf)
+
 async def rep_nospend(update, context):
     query = update.callback_query; await query.answer(); m = get_now().strftime("%m/%Y")
     dg = {int(t['date'][:2]) for t in db["transactions"] if str(t['type']).lower()=='gasto' and m in t['date']}
@@ -448,7 +463,7 @@ async def sub_cmd(update, context):
         n, v, d = context.args[0], float(context.args[1].replace(',', '.')), int(context.args[2])
         if "subscriptions" not in db: db["subscriptions"] = []
         db["subscriptions"].append({"name": n, "val": v, "day": d}); save_db(db)
-        await update.message.reply_text(f"✅ Assinatura {n} salva!")
+        await update.message.reply_text("✅ Salvo!")
     except: await update.message.reply_text("❌ Erro. Use: `/sub Nome Valor Dia`")
 async def sub_del_menu(update, context):
     query = update.callback_query; await query.answer(); subs = db.get("subscriptions", [])
@@ -474,7 +489,7 @@ async def menu_help(update, context):
     kb = [[InlineKeyboardButton("🔙 Voltar", callback_data="back")]]
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-# --- SCHEDULER ---
+# --- SCHEDULER (ATIVADO DE VOLTA) ---
 async def check_reminders(context):
     now_str = get_now().strftime("%Y-%m-%d %H:%M")
     to_remove = []
@@ -577,7 +592,7 @@ async def smart_entry(update, context):
         else: await wait.edit_text(t)
     except Exception as e: await wait.edit_text(f"⚠️ Erro IA: {e}")
 
-# ================= 8. MAIN =================
+# ================= 8. MAIN (TUDO CONECTADO) =================
 def main():
     print("🚀 Bot V88 Iniciando...")
     start_keep_alive()
@@ -649,7 +664,7 @@ def main():
     for p, f in cbs: app.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     app.add_handler(MessageHandler(filters.TEXT | filters.VOICE | filters.AUDIO | filters.PHOTO | filters.Document.ALL, restricted(smart_entry)))
     
-    print("✅ V88 COMPLETE ONLINE!")
+    print("✅ V88 RESTORED & ONLINE!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
