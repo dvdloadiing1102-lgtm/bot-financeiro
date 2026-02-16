@@ -9,6 +9,7 @@ import uuid
 import math
 import random
 import calendar
+import asyncio
 from datetime import datetime, timedelta
 
 # ================= 1. AUTO-REPARO =================
@@ -45,7 +46,7 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v102.json"
+DB_FILE = "finance_v103.json"
 
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
@@ -95,7 +96,7 @@ def save_db(data):
 
 db = load_db()
 
-# ================= 5. UTILS =================
+# ================= 5. UTILS & SCHEDULER =================
 def get_now(): return datetime.utcnow() - timedelta(hours=3)
 
 def calc_stats():
@@ -130,6 +131,28 @@ async def check_reminders(context):
             for index in sorted(to_remove, reverse=True): del db["reminders"][index]
             save_db(db)
 
+# --- NOVA FUNÇÃO: BACKUP AUTOMÁTICO ---
+def perform_auto_backup(app):
+    async def send_backup():
+        if ADMIN_ID and os.path.exists(DB_FILE):
+            try:
+                with open(DB_FILE, "rb") as f:
+                    await app.bot.send_document(
+                        chat_id=ADMIN_ID, 
+                        document=f, 
+                        caption="🔄 **Backup Automático Diário**\nSeus dados estão seguros na nuvem do Telegram.", 
+                        parse_mode="Markdown"
+                    )
+                print(f"✅ Backup diário enviado para ADMIN_ID: {ADMIN_ID}")
+            except Exception as e:
+                print(f"❌ Erro ao enviar backup automático: {e}")
+    try:
+        # Tenta pegar o loop rodando, se não tiver (thread separada), cria um
+        loop = asyncio.get_running_loop()
+        loop.create_task(send_backup())
+    except RuntimeError:
+        asyncio.run(send_backup())
+
 # ================= 6. INTERFACE =================
 async def start(update, context):
     context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
@@ -144,7 +167,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V102 (SMART QUERY)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V103 (AUTO-BACKUP)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -377,20 +400,22 @@ async def dream_cmd(update, context):
     except: pass
 
 async def menu_help(update, context): await update.callback_query.edit_message_text("📚 **Manual de IA:**\n\n- 'Gastei 50 de Uber'\n- 'Adicionar leite na lista'\n- 'Quanto gastei de ifood esse mês?'\n- 'Dicas financeiras'", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
+
+# BACKUP MANUAL MANTIDO INTACTO
 async def backup(update, context): 
     with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
+    
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def gen_key(update, context): pass
 async def ask_key(update, context): pass
 async def redeem_key(update, context): pass
 
-# --- IA HANDLER (COM CONSULTA INTELIGENTE E PERSONA) ---
+# --- IA HANDLER ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
     msg = update.message; wait = await msg.reply_text("🧠 Processando..."); now = get_now()
     
-    # 1. Configura a Persona
     persona = db["config"].get("persona", "padrao")
     persona_inst = ""
     if persona == "julius": 
@@ -400,7 +425,6 @@ async def smart_entry(update, context):
     else: 
         persona_inst = "Você é um consultor financeiro profissional e amigável. Dê respostas diretas e organizadas."
 
-    # 2. Puxa os gastos do MÊS ATUAL para a IA ler
     m_str = now.strftime("%m/%Y")
     current_tx = [{"valor": t["value"], "categoria": t["category"], "descricao": t.get("description", "")} for t in db["transactions"] if t["type"] == "gasto" and m_str in t["date"]]
     tx_json = json.dumps(current_tx, ensure_ascii=False)
@@ -414,7 +438,7 @@ async def smart_entry(update, context):
         Responda APENAS neste formato JSON:
         - Para Mercado: {{"type":"mercado", "item":"nome_do_item"}}
         - Para Registrar Gasto/Ganho: {{"type":"gasto", "val":50.50, "cat":"Transporte", "desc":"Uber para casa"}} (campo desc é obrigatório).
-        - Para Consulta de Gastos (ex: 'quanto gastei de ifood?' ou 'quanto gastei de transporte?'): Leia o HISTÓRICO DE GASTOS acima, calcule a soma exata dos valores que correspondem à pesquisa (categoria ou descrição), e retorne: {{"type":"conversa", "msg":"[Total gasto] + [Sua reação/bronca baseada na sua persona!]"}}
+        - Para Consulta de Gastos: Leia o HISTÓRICO DE GASTOS acima, calcule a soma exata dos valores que correspondem à pesquisa e retorne: {{"type":"conversa", "msg":"[Total gasto] + [Sua reação/bronca baseada na sua persona!]"}}
         - Para Bate-Papo/Conselhos: {{"type":"conversa", "msg":"Sua resposta no tom da sua persona."}}"""
         
         content = [prompt]
@@ -447,10 +471,10 @@ async def smart_entry(update, context):
 
 # ================= 9. MAIN =================
 def main():
-    print("🚀 Iniciando Bot V102 (SMART QUERY)...")
+    print("🚀 Iniciando Bot V103 (AUTO-BACKUP)...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "Bot V102 Online"
+    def home(): return "Bot V103 Online"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -488,11 +512,14 @@ def main():
     for p, f in cbs: app_bot.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     app_bot.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, restricted(smart_entry)))
     
+    # Scheduler do Bot
     scheduler = BackgroundScheduler()
     scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app_bot])
+    # NOVO: Backup automático todo dia as 23:59
+    scheduler.add_job(perform_auto_backup, 'cron', hour=23, minute=59, args=[app_bot])
     scheduler.start()
     
-    print("✅ V102 SMART QUERY ONLINE!")
+    print("✅ V103 AUTO-BACKUP ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
