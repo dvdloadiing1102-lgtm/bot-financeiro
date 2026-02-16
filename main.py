@@ -45,7 +45,7 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v101.json"
+DB_FILE = "finance_v102.json"
 
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
@@ -144,7 +144,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V101 (COMPLETO)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V102 (SMART QUERY)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -164,7 +164,7 @@ async def undo_quick(update, context):
     if db["transactions"]: db["transactions"].pop(); save_db(db); await query.edit_message_text("🗑️ Desfeito!")
     else: await query.edit_message_text("Nada para desfazer.")
 
-# --- MANUAL COM DESCRIÇÃO RESTAURADA ---
+# --- MANUAL COM DESCRIÇÃO ---
 async def manual_gasto_trigger(update, context): context.user_data["t"] = "gasto"; await update.message.reply_text("💸 Valor?"); return REG_VALUE
 async def manual_ganho_trigger(update, context): context.user_data["t"] = "ganho"; await update.message.reply_text("💰 Valor?"); return REG_VALUE
 async def reg_start(update, context): await start(update, context); return REG_TYPE
@@ -219,7 +219,7 @@ async def menu_shop(update, context):
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def sl_c(update, context): db["shopping_list"] = []; save_db(db); await start(update, context)
 
-# --- RELATÓRIOS COMPLETOS ---
+# --- RELATÓRIOS ---
 async def menu_reports(update, context): 
     kb = [
         [InlineKeyboardButton("🔮 Insights e Previsão", callback_data="rep_insights")],
@@ -230,7 +230,6 @@ async def menu_reports(update, context):
     ]
     await update.callback_query.edit_message_text("📊 **Relatórios Avançados:**", reply_markup=InlineKeyboardMarkup(kb))
 
-# EXTRATO COM DESCRIÇÃO
 async def rep_list(update, context): 
     trans = db["transactions"][-15:]
     if not trans: await update.callback_query.edit_message_text("📭 Vazio.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]])); return
@@ -260,22 +259,15 @@ async def delete_transaction_confirm(update, context):
 
 async def rep_insights(update, context):
     await update.callback_query.answer("Calculando previsões...")
-    now = get_now()
-    m = now.strftime("%m/%Y")
+    now = get_now(); m = now.strftime("%m/%Y")
     gastos_mes = sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])
     ganhos_mes = sum(t['value'] for t in db["transactions"] if t['type']=='ganho' and m in t['date'])
-    dias_passados = now.day
-    dias_no_mes = calendar.monthrange(now.year, now.month)[1]
-
+    dias_passados = now.day; dias_no_mes = calendar.monthrange(now.year, now.month)[1]
     media_diaria = gastos_mes / dias_passados if dias_passados > 0 else 0
     previsao_gastos = media_diaria * dias_no_mes
     saldo_previsto = ganhos_mes - previsao_gastos
 
-    txt = f"🔮 **INSIGHTS INTELIGENTES ({m})**\n\n"
-    txt += f"📉 **Média Diária:** R$ {media_diaria:.2f}/dia\n"
-    txt += f"⚠️ **Previsão de Gastos (Fim do Mês):** R$ {previsao_gastos:.2f}\n"
-    txt += f"💰 **Previsão de Saldo Final:** R$ {saldo_previsto:.2f}\n\n"
-
+    txt = f"🔮 **INSIGHTS INTELIGENTES ({m})**\n\n📉 **Média Diária:** R$ {media_diaria:.2f}/dia\n⚠️ **Previsão de Gastos (Fim do Mês):** R$ {previsao_gastos:.2f}\n💰 **Previsão de Saldo Final:** R$ {saldo_previsto:.2f}\n\n"
     if saldo_previsto < 0: txt += "🚨 **ALERTA:** Você vai fechar o mês no **VERMELHO**. Reduza os custos imediatamente!"
     elif saldo_previsto < (ganhos_mes * 0.1): txt += "⚠️ **AVISO:** Vai sobrar pouco. Cuidado."
     else: txt += "✅ **ÓTIMO CAMINHO:** Mantendo esse padrão, vai sobrar dinheiro!"
@@ -325,7 +317,7 @@ async def rep_nospend(update, context):
         txt += f"{'🔴' if d in dg else '🟢'} "; txt+= "\n" if d%7==0 else ""
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
-# --- CATEGORIAS & CONFIGS ---
+# --- MENUS DE SUPORTE ---
 async def menu_cats(update, context):
     kb = [[InlineKeyboardButton("➕ Criar", callback_data="c_add"), InlineKeyboardButton("❌ Del", callback_data="c_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text("Categorias:", reply_markup=InlineKeyboardMarkup(kb))
@@ -338,7 +330,6 @@ async def c_del(update, context):
 async def c_kill(update, context):
     _, t, n = update.callback_query.data.split("_"); db["categories"][t].remove(n); save_db(db); await update.callback_query.edit_message_text("Apagada!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 
-# PERSONAS E CONFIGS RESTAURADOS
 async def menu_conf(update, context):
     p = "🔴" if db["config"]["panic_mode"] else "🟢"; 
     persona_atual = db["config"].get("persona", "padrao").title()
@@ -385,31 +376,46 @@ async def dream_cmd(update, context):
     try: v = float(context.args[-1]); await update.message.reply_text(f"🛌 Meta ajustada para: R$ {v}")
     except: pass
 
-async def menu_help(update, context): await update.callback_query.edit_message_text("📚 **Manual de IA:**\n\n- 'Gastei 50 de Uber'\n- 'Adicionar leite na lista'\n- 'Dicas financeiras'", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
+async def menu_help(update, context): await update.callback_query.edit_message_text("📚 **Manual de IA:**\n\n- 'Gastei 50 de Uber'\n- 'Adicionar leite na lista'\n- 'Quanto gastei de ifood esse mês?'\n- 'Dicas financeiras'", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
 async def backup(update, context): 
     with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+async def gen_key(update, context): pass
+async def ask_key(update, context): pass
+async def redeem_key(update, context): pass
 
-# --- IA HANDLER COM DESCRIÇÃO E PERSONAS RESTAURADOS ---
+# --- IA HANDLER (COM CONSULTA INTELIGENTE E PERSONA) ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
     msg = update.message; wait = await msg.reply_text("🧠 Processando..."); now = get_now()
     
-    # Prepara a Persona
+    # 1. Configura a Persona
     persona = db["config"].get("persona", "padrao")
     persona_inst = ""
-    if persona == "julius": persona_inst = "Você é o Julius de Todo Mundo Odeia o Chris. Reclame que o usuário está gastando muito, seja super pão duro e engraçado."
-    elif persona == "zoeiro": persona_inst = "Você é extremamente irônico e zoeiro. Faça piadas pesadas com os gastos do usuário."
-    else: persona_inst = "Você é um consultor financeiro profissional e amigável."
+    if persona == "julius": 
+        persona_inst = "Você é o Julius de 'Todo Mundo Odeia o Chris'. Você é extremamente pão duro. Se o usuário consultar gastos ou registrar gastos, dê uma bronca, reclame do valor, e diga o que você faria com esse dinheiro ou quanto de desconto pediria."
+    elif persona == "zoeiro": 
+        persona_inst = "Você é um robô extremamente irônico, sarcástico e zoeiro. Ao responder consultas de gastos, tire muito sarro da cara do usuário, dê puxões de orelha humilhantes se ele gastou com besteira, e chame ele de mão de vaca ou burguês safado."
+    else: 
+        persona_inst = "Você é um consultor financeiro profissional e amigável. Dê respostas diretas e organizadas."
+
+    # 2. Puxa os gastos do MÊS ATUAL para a IA ler
+    m_str = now.strftime("%m/%Y")
+    current_tx = [{"valor": t["value"], "categoria": t["category"], "descricao": t.get("description", "")} for t in db["transactions"] if t["type"] == "gasto" and m_str in t["date"]]
+    tx_json = json.dumps(current_tx, ensure_ascii=False)
 
     try:
-        # Prompt Atualizado para pegar "desc" (Descrição)
         prompt = f"""AGORA: {now}. {persona_inst}
-        Responda APENAS JSON.
-        - Mercado: {{"type":"mercado", "item":"leite"}}
-        - Gasto/Ganho: {{"type":"gasto", "val":50.50, "cat":"Transporte", "desc":"Uber para casa"}} (desc DEVE conter o nome/detalhe do gasto).
-        - Conversa/Conselho: {{"type":"conversa", "msg":"Sua resposta formatada..."}}"""
+        
+        HISTÓRICO DE GASTOS DO USUÁRIO DESTE MÊS (Para responder consultas):
+        {tx_json}
+
+        Responda APENAS neste formato JSON:
+        - Para Mercado: {{"type":"mercado", "item":"nome_do_item"}}
+        - Para Registrar Gasto/Ganho: {{"type":"gasto", "val":50.50, "cat":"Transporte", "desc":"Uber para casa"}} (campo desc é obrigatório).
+        - Para Consulta de Gastos (ex: 'quanto gastei de ifood?' ou 'quanto gastei de transporte?'): Leia o HISTÓRICO DE GASTOS acima, calcule a soma exata dos valores que correspondem à pesquisa (categoria ou descrição), e retorne: {{"type":"conversa", "msg":"[Total gasto] + [Sua reação/bronca baseada na sua persona!]"}}
+        - Para Bate-Papo/Conselhos: {{"type":"conversa", "msg":"Sua resposta no tom da sua persona."}}"""
         
         content = [prompt]
         if msg.voice or msg.audio:
@@ -418,7 +424,7 @@ async def smart_entry(update, context):
                 myfile = genai.upload_file(f_path)
                 while myfile.state.name == "PROCESSING": time.sleep(1); myfile = genai.get_file(myfile.name)
                 content.append(myfile)
-            except: await wait.edit_text("⚠️ Erro áudio. Tente texto."); return
+            except: await wait.edit_text("⚠️ Erro no áudio. Tente digitar."); return
         elif msg.photo:
             f = await context.bot.get_file(msg.photo[-1].file_id); d = await f.download_as_bytearray()
             content.append({"mime_type": "image/jpeg", "data": bytes(d)})
@@ -432,7 +438,6 @@ async def smart_entry(update, context):
         if data:
             if data.get('type') == 'mercado': db["shopping_list"].append(data['item']); save_db(db); await wait.edit_text(f"🛒 **Mercado:** {data['item']}", parse_mode="Markdown"); return
             if 'val' in data: 
-                # Salva com a descrição
                 desc = data.get('desc', data.get('cat', 'IA'))
                 db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":data['type'], "value":float(data['val']), "category":data.get('cat','Geral'), "description":desc, "date":now.strftime("%d/%m/%Y %H:%M")})
                 save_db(db); await wait.edit_text(f"✅ Registrado: R$ {data['val']:.2f}\n🏷️ {data.get('cat')} - {desc}", parse_mode="Markdown"); return
@@ -442,10 +447,10 @@ async def smart_entry(update, context):
 
 # ================= 9. MAIN =================
 def main():
-    print("🚀 Iniciando Bot V101 (COMPLETO)...")
+    print("🚀 Iniciando Bot V102 (SMART QUERY)...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "Bot V101 Online"
+    def home(): return "Bot V102 Online"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -487,7 +492,7 @@ def main():
     scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V101 FULL RESTORED ONLINE!")
+    print("✅ V102 SMART QUERY ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
