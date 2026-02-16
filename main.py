@@ -8,6 +8,7 @@ import json
 import uuid
 import math
 import random
+import calendar
 from datetime import datetime, timedelta
 
 # ================= 1. AUTO-REPARO =================
@@ -44,24 +45,21 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v99.json"
+DB_FILE = "finance_v100.json"
 
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION) = range(9)
 
-# ================= 3. IA SETUP (AUTO-DISCOVERY - SEM ERRO 404) =================
+# ================= 3. IA SETUP (AUTO-DISCOVERY) =================
 model_ai = None
 MODEL_STATUS = "IA OFF"
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
     try:
-        # Pergunta ao Google o que temos disponivel
         all_models = list(genai.list_models())
-        # Filtra apenas os que geram texto
         valid_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
         
         if valid_models:
-            # Tenta pegar o Flash ou Pro, se não, pega o primeiro da lista
             chosen = next((m for m in valid_models if 'flash' in m), next((m for m in valid_models if 'pro' in m), valid_models[0]))
             model_ai = genai.GenerativeModel(chosen)
             MODEL_STATUS = f"Conectado: {chosen}"
@@ -70,7 +68,6 @@ if GEMINI_KEY:
             print("⚠️ Nenhum modelo disponível na conta.")
     except Exception as e:
         print(f"❌ Erro ao listar modelos: {e}")
-        # Fallback desesperado
         try: model_ai = genai.GenerativeModel('gemini-pro')
         except: pass
 
@@ -79,7 +76,8 @@ def load_db():
     default = {
         "transactions": [], "shopping_list": [], "debts_v2": {},
         "categories": {"ganho": ["Salário", "Extra"], "gasto": ["Alimentação", "Transporte", "Lazer", "Mercado", "Casa"]},
-        "vip_users": {}, "config": {"panic_mode": False}, "reminders": [], "subscriptions": []
+        "vip_users": {}, "config": {"panic_mode": False}, "reminders": [], "subscriptions": [],
+        "goals": {}
     }
     if not os.path.exists(DB_FILE): return default
     try:
@@ -140,7 +138,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V99**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V100 PREMIUM**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -203,8 +201,43 @@ async def menu_shop(update, context):
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def sl_c(update, context): db["shopping_list"] = []; save_db(db); await start(update, context)
 
-# --- RELATÓRIOS ---
-async def menu_reports(update, context): await update.callback_query.edit_message_text("Relatórios:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie")], [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend")], [InlineKeyboardButton("🔙", callback_data="back")]]))
+# --- RELATÓRIOS & INSIGHTS (NOVO) ---
+async def menu_reports(update, context): 
+    kb = [
+        [InlineKeyboardButton("🔮 Insights e Previsão", callback_data="rep_insights")],
+        [InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie")], 
+        [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend")], 
+        [InlineKeyboardButton("🔙", callback_data="back")]
+    ]
+    await update.callback_query.edit_message_text("📊 **Relatórios Avançados:**", reply_markup=InlineKeyboardMarkup(kb))
+
+async def rep_insights(update, context):
+    await update.callback_query.answer("Calculando previsões...")
+    now = get_now()
+    m = now.strftime("%m/%Y")
+    gastos_mes = sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])
+    ganhos_mes = sum(t['value'] for t in db["transactions"] if t['type']=='ganho' and m in t['date'])
+    dias_passados = now.day
+    dias_no_mes = calendar.monthrange(now.year, now.month)[1]
+
+    media_diaria = gastos_mes / dias_passados if dias_passados > 0 else 0
+    previsao_gastos = media_diaria * dias_no_mes
+    saldo_previsto = ganhos_mes - previsao_gastos
+
+    txt = f"🔮 **INSIGHTS INTELIGENTES ({m})**\n\n"
+    txt += f"📉 **Média de Gasto Diário:** R$ {media_diaria:.2f}/dia\n"
+    txt += f"⚠️ **Previsão de Gastos (Fim do Mês):** R$ {previsao_gastos:.2f}\n"
+    txt += f"💰 **Previsão de Saldo Final:** R$ {saldo_previsto:.2f}\n\n"
+
+    if saldo_previsto < 0:
+        txt += "🚨 **ALERTA DE IA:** O seu padrão de gastos atual indica que você vai fechar o mês no **VERMELHO**. Reduza os custos imediatamente!"
+    elif saldo_previsto < (ganhos_mes * 0.1):
+        txt += "⚠️ **AVISO:** Você deve fechar o mês com pouca sobra. Cuidado com compras não planejadas."
+    else:
+        txt += "✅ **ÓTIMO CAMINHO:** Mantendo esse padrão, você fechará o mês com uma boa margem no azul!"
+
+    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="menu_reports")]]), parse_mode="Markdown")
+
 async def rep_list(update, context): tr = db["transactions"][-10:]; txt = "\n".join([f"{t['type']} {t['value']} ({t['category']})" for t in tr]); await update.callback_query.edit_message_text(txt[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def rep_pie(update, context):
     await update.callback_query.answer("Gerando...")
@@ -230,7 +263,7 @@ async def rep_nospend(update, context):
     for d in range(1, 32): txt += f"{'🔴' if d in dg else '🟢'} "; txt+= "\n" if d%7==0 else ""
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
 
-# --- MENUS DE SUPORTE RESTAURADOS ---
+# --- MENUS DE SUPORTE ---
 async def menu_cats(update, context):
     kb = [[InlineKeyboardButton("➕ Criar", callback_data="c_add"), InlineKeyboardButton("❌ Del", callback_data="c_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text("Categorias:", reply_markup=InlineKeyboardMarkup(kb))
@@ -245,28 +278,29 @@ async def c_kill(update, context):
 
 async def menu_conf(update, context):
     p = "🔴" if db["config"]["panic_mode"] else "🟢"; 
-    kb = [[InlineKeyboardButton(f"Pânico: {p}", callback_data="tg_panic")], [InlineKeyboardButton("🔔 Assinaturas", callback_data="menu_subs"), InlineKeyboardButton("🔙", callback_data="back")]]
+    kb = [[InlineKeyboardButton(f"Pânico: {p}", callback_data="tg_panic")], [InlineKeyboardButton("🔔 Assinaturas Fixas", callback_data="menu_subs")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text("Configs:", reply_markup=InlineKeyboardMarkup(kb))
 async def tg_panic(update, context): db["config"]["panic_mode"] = not db["config"]["panic_mode"]; save_db(db); await menu_conf(update, context)
 
 async def roleta(update, context):
-    res = "😈 **COMPRA!**" if random.random() > 0.5 else "😇 **NÃO COMPRA!**"
-    kb = [[InlineKeyboardButton("🔄 Girar", callback_data="roleta")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    res = "😈 **COMPRA!** (Viva um pouco)" if random.random() > 0.5 else "😇 **NÃO COMPRA!** (Foco na meta!)"
+    kb = [[InlineKeyboardButton("🔄 Girar Novamente", callback_data="roleta")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text(res, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def menu_agenda(update, context):
-    rems = db.get("reminders", []); txt = "⏰ **AGENDA:**\n" + "\n".join([f"• {r['time']}: {r['text']}" for r in rems])
-    kb = [[InlineKeyboardButton("🗑️ Limpar", callback_data="del_agenda_all")], [InlineKeyboardButton("🔙", callback_data="back")]]
-    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    rems = db.get("reminders", []); txt = "⏰ **AGENDA INTELIGENTE:**\n" + "\n".join([f"• {r['time']}: {r['text']}" for r in rems])
+    kb = [[InlineKeyboardButton("🗑️ Limpar Agenda", callback_data="del_agenda_all")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    await update.callback_query.edit_message_text(txt + "\n\n_Dica: Peça para a IA 'Me lembre de pagar a luz amanhã às 10:00'_", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 async def agenda_del(update, context): db["reminders"] = []; save_db(db); await update.callback_query.answer("Limpo!"); await start(update, context)
 
 async def menu_subs(update, context):
-    subs = db.get("subscriptions", []); txt = f"🔔 **ASSINATURAS**\nTotal: **R$ {sum(float(s['val']) for s in subs):.2f}**"
-    kb = [[InlineKeyboardButton("➕ Add (/sub)", callback_data="sub_add"), InlineKeyboardButton("🗑️ Del", callback_data="sub_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    subs = db.get("subscriptions", []); txt = f"🔔 **ASSINATURAS E CONTAS RECORRENTES**\nTotal Mensal Comprometido: **R$ {sum(float(s['val']) for s in subs):.2f}**\n\n"
+    if subs: txt += "\n".join([f"• {s['name']} (Dia {s['day']}): R$ {s['val']}" for s in subs])
+    kb = [[InlineKeyboardButton("➕ Adicionar", callback_data="sub_add"), InlineKeyboardButton("🗑️ Limpar", callback_data="sub_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-async def sub_add_help(update, context): await update.callback_query.answer(); await update.callback_query.message.reply_text("Use:\n`/sub Netflix 55.90 15`")
+async def sub_add_help(update, context): await update.callback_query.answer(); await update.callback_query.message.reply_text("Use este comando no chat:\n`/sub Nomedaconta Valor Dia`\nEx: `/sub Netflix 55.90 15`")
 async def sub_cmd(update, context):
-    try: n, v, d = context.args[0], float(context.args[1].replace(',', '.')), int(context.args[2]); db["subscriptions"].append({"name": n, "val": v, "day": d}); save_db(db); await update.message.reply_text("✅ Salvo!")
+    try: n, v, d = context.args[0], float(context.args[1].replace(',', '.')), int(context.args[2]); db["subscriptions"].append({"name": n, "val": v, "day": d}); save_db(db); await update.message.reply_text("✅ Conta recorrente salva!")
     except: await update.message.reply_text("Erro. Use: `/sub Nome Valor Dia`")
 async def sub_del_menu(update, context): db["subscriptions"] = []; save_db(db); await menu_subs(update, context)
 
@@ -274,7 +308,7 @@ async def dream_cmd(update, context):
     try: v = float(context.args[-1]); await update.message.reply_text(f"🛌 Meta: R$ {v}")
     except: pass
 
-async def menu_help(update, context): await update.callback_query.edit_message_text("Fale 'Gastei 10' ou 'Mercado leite'.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
+async def menu_help(update, context): await update.callback_query.edit_message_text("📚 **Manual de IA:**\n\n- Fale 'Gastei 50 no mercado'.\n- Fale 'Adicionar leite na lista de compras'.\n- Fale 'Me dê dicas financeiras' (A IA atua como consultor).\n\nLembre-se de fazer Backup mensalmente.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
 async def backup(update, context): 
     with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
@@ -282,17 +316,20 @@ async def gen_key(update, context): pass
 async def ask_key(update, context): pass
 async def redeem_key(update, context): pass
 
-# --- IA HANDLER ---
+# --- IA HANDLER (CONSULTOR FINANCEIRO ATUALIZADO) ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
-    msg = update.message; wait = await msg.reply_text("🧠..."); now = get_now()
+    msg = update.message; wait = await msg.reply_text("🧠 Processando..."); now = get_now()
     
     try:
-        prompt = f"""AGORA: {now}. Responda APENAS JSON.
+        # Prompt atualizado para assumir papel de consultor
+        prompt = f"""AGORA: {now}. Você é um ASSISTENTE E CONSULTOR FINANCEIRO INTELIGENTE.
+        Responda APENAS JSON.
         Se usuário diz 'comprar leite' ou 'põe pão na lista': {{"type":"mercado", "item":"leite"}}.
         Se usuário diz 'gastei 10 em lanche': {{"type":"gasto", "val":10, "cat":"Lazer"}}.
-        Se for conversa: {{"type":"conversa", "msg":"resposta"}}."""
+        Se usuário pedir conselhos, dicas, ou fizer perguntas amplas sobre dinheiro/compras, assuma a postura de um consultor financeiro: {{"type":"conversa", "msg":"Sua análise e conselho financeiro bem formatado..."}}.
+        Se for conversa normal: {{"type":"conversa", "msg":"resposta"}}."""
         
         content = [prompt]
         if msg.voice or msg.audio:
@@ -315,16 +352,16 @@ async def smart_entry(update, context):
         if data:
             if data.get('type') == 'mercado': db["shopping_list"].append(data['item']); save_db(db); await wait.edit_text(f"🛒 Adicionado: **{data['item']}**", parse_mode="Markdown"); return
             if 'val' in data: db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":data['type'], "value":float(data['val']), "category":data.get('cat','Geral'), "date":now.strftime("%d/%m/%Y %H:%M")}); save_db(db); await wait.edit_text(f"✅ Registrado: R$ {data['val']:.2f}", parse_mode="Markdown"); return
-            if data.get('msg'): await wait.edit_text(data['msg']); return
+            if data.get('msg'): await wait.edit_text(data['msg'], parse_mode="Markdown"); return
         await wait.edit_text(t)
     except Exception as e: await wait.edit_text(f"⚠️ Erro: {str(e)[:100]}")
 
 # ================= 9. MAIN =================
 def main():
-    print("🚀 Iniciando Bot V99...")
+    print("🚀 Iniciando Bot V100 PREMIUM...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "Bot V99 Online"
+    def home(): return "Bot V100 Online"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -349,7 +386,7 @@ def main():
     ))
     
     cbs = [("menu_shop", menu_shop), ("menu_debts", menu_debts), ("sl_c", sl_c), ("back", start),
-           ("menu_reports", menu_reports), ("rep_list", rep_list), ("rep_pie", rep_pie), ("rep_pdf", rep_pdf), ("rep_nospend", rep_nospend),
+           ("menu_reports", menu_reports), ("rep_list", rep_list), ("rep_pie", rep_pie), ("rep_pdf", rep_pdf), ("rep_nospend", rep_nospend), ("rep_insights", rep_insights),
            ("menu_agenda", menu_agenda), ("del_agenda_all", agenda_del),
            ("menu_cats", menu_cats), ("c_del", c_del), ("kc_", c_kill),
            ("menu_conf", menu_conf), ("tg_panic", tg_panic), ("menu_subs", menu_subs), ("sub_add", sub_add_help), ("sub_del", sub_del_menu),
@@ -364,7 +401,7 @@ def main():
     scheduler.add_job(check_reminders, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V99 ONLINE - MODELO: " + MODEL_STATUS)
+    print("✅ V100 PREMIUM ONLINE - MODELO: " + MODEL_STATUS)
     app_bot.run_polling()
 
 if __name__ == "__main__":
