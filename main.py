@@ -10,6 +10,7 @@ import math
 import random
 import calendar
 import asyncio
+import io
 from datetime import datetime, timedelta
 
 # ================= 1. AUTO-REPARO =================
@@ -46,7 +47,7 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v109.json"
+DB_FILE = "finance_v110.json"
 
 # ESTADOS CONVERSATION
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION, 
@@ -195,7 +196,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V109 (STABLE)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V110 (FIXED)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -260,7 +261,8 @@ async def menu_reports(update, context):
         [InlineKeyboardButton("🔮 Vidente IPTV", callback_data="rep_forecast"), InlineKeyboardButton("🔮 Insights", callback_data="rep_insights")],
         [InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🗑️ Gerenciar", callback_data="menu_manage_trans")], 
         [InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie"), InlineKeyboardButton("📈 Evolução", callback_data="rep_evo")],
-        [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("🔙 Voltar", callback_data="back")]
+        [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📊 CSV", callback_data="rep_csv")],
+        [InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend"), InlineKeyboardButton("🔙 Voltar", callback_data="back")]
     ]
     await update.callback_query.edit_message_text("📊 **Relatórios Ultimate:**", reply_markup=InlineKeyboardMarkup(kb))
 
@@ -320,6 +322,46 @@ async def rep_forecast(update, context):
         except: pass
         
     txt = f"🔮 **VIDENTE IPTV (FLUXO DE CAIXA)**\n\n💰 **Próximos 7 Dias:** R$ {val7:.2f}\n💰 **Próximos 30 Dias:** R$ {val30:.2f}\n\n_Use isso para planejar suas contas!_"
+    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
+
+# RESTAURANDO FUNÇÕES PERDIDAS
+async def rep_csv(update, context):
+    await update.callback_query.answer("Gerando CSV...")
+    with open("relatorio.csv", "w", newline='', encoding='utf-8-sig') as f:
+        import csv
+        w = csv.writer(f, delimiter=';')
+        w.writerow(["Data", "Tipo", "Valor", "Categoria", "Descricao"])
+        for t in db["transactions"]:
+            w.writerow([t['date'], t['type'], str(t['value']).replace('.',','), t['category'], t.get('description', '')])
+    with open("relatorio.csv", "rb") as f:
+        await update.callback_query.message.reply_document(f)
+
+async def rep_evo(update, context):
+    await update.callback_query.answer("Gerando Gráfico...")
+    d, l = [], []
+    for i in range(5, -1, -1):
+        m = (get_now() - relativedelta(months=i)).strftime("%m/%Y")
+        val = sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])
+        d.append(val)
+        l.append(m[:2])
+    plt.figure(figsize=(6, 4))
+    plt.plot(l, d, marker='o', color='#00ffcc')
+    plt.grid(alpha=0.3)
+    plt.title("Evolução 6 Meses", color="white")
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    plt.close()
+    await update.callback_query.message.reply_photo(buf)
+
+async def rep_nospend(update, context):
+    m = get_now().strftime("%m/%Y")
+    dg = {int(t['date'][:2]) for t in db["transactions"] if t['type']=='gasto' and m in t['date']}
+    txt = f"📅 **Mapa {m}**\n` D S T Q Q S S`\n"
+    for d in range(1, 32):
+        if d > get_now().day: break
+        txt += f"{'🔴' if d in dg else '🟢'} "
+        if d % 7 == 0: txt += "\n"
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
 # ================= MÓDULO IPTV =================
@@ -576,10 +618,10 @@ async def smart_entry(update, context):
 
 # ================= MAIN =================
 def main():
-    print("🚀 V109 CLEAN CODE ONLINE...")
+    print("🚀 V110 FIXED ONLINE...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "V109 OK"
+    def home(): return "V110 OK"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -638,7 +680,7 @@ def main():
     scheduler.add_job(routine_checks, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V109 CLEAN CODE ONLINE!")
+    print("✅ V110 FIXED ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
