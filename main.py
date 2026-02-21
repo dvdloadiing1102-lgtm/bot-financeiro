@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v113.json"
+DB_FILE = "finance_v114.json"
 
 # ESTADOS CONVERSATION
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION, 
@@ -66,6 +66,7 @@ if GEMINI_KEY:
         all_models = list(genai.list_models())
         valid_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
         if valid_models:
+            # Prioriza Flash 1.5 ou Pro
             chosen = next((m for m in valid_models if 'flash' in m), next((m for m in valid_models if 'pro' in m), valid_models[0]))
             model_ai = genai.GenerativeModel(chosen)
             MODEL_STATUS = f"Conectado: {chosen}"
@@ -88,6 +89,7 @@ def load_db():
     try:
         with open(DB_FILE, "r") as f: 
             data = json.load(f)
+            # Garantir chaves
             if "iptv_clients" not in data: data["iptv_clients"] = []
             if "goals" not in data: data["goals"] = []
             if "achievements" not in data: data["achievements"] = []
@@ -169,6 +171,8 @@ async def check_achievements(context):
     new_badge = None
     if len(db["iptv_clients"]) >= 5 and "ip_baron" not in db["achievements"]:
         db["achievements"].append("ip_baron"); new_badge = "👑 **Barão do IPTV** (5+ Clientes)"
+    if len(db["iptv_clients"]) >= 20 and "ip_king" not in db["achievements"]:
+        db["achievements"].append("ip_king"); new_badge = "🤴 **Rei do Stream** (20+ Clientes)"
     
     saldo, _ = calc_stats()
     if saldo > 1000 and "rich_1k" not in db["achievements"]:
@@ -195,7 +199,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V113 (FINAL REPAIR)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V114 (FINAL)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -243,6 +247,7 @@ async def menu_badges(update, context):
     txt = "🏆 **SUAS CONQUISTAS:**\n\n"
     mapa = {
         "ip_baron": "👑 **Barão do IPTV**: 5+ Clientes",
+        "ip_king": "🤴 **Rei do Stream**: 20+ Clientes",
         "rich_1k": "💸 **Primeiro K**: Saldo > 1.000",
         "saver": "🛡️ **Pão Duro**: Economizou hoje"
     }
@@ -500,7 +505,7 @@ async def reg_fin(update, context):
     else: await update.message.reply_text(msg)
     return await start(update, context)
 
-# OUTROS MENUS
+# OUTROS MENUS (DÍVIDAS)
 async def menu_debts(update, context): 
     txt="🧾 Dívidas:"
     kb=[[InlineKeyboardButton(f"{n}: {v}", callback_data=f"ed_{n}")] for n,v in db.get("debts_v2", {}).items()]
@@ -604,27 +609,48 @@ async def backup(update, context):
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def roleta(update, context): await update.callback_query.edit_message_text("Girar", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Girar", callback_data="roleta"), InlineKeyboardButton("🔙", callback_data="back")]]))
 
-# --- IA HANDLER CORRIGIDO (ÁUDIO OBRIGATÓRIO) ---
+# --- REINTRODUZINDO AS FUNÇÕES DE ASSINATURA QUE FALTAVAM ---
+async def sub_add_help(update, context): 
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("Use:\n`/sub Netflix 55.90 15`\n(Nome Valor Dia)")
+
+async def sub_cmd(update, context):
+    try: 
+        n, v, d = context.args[0], float(context.args[1].replace(',', '.')), int(context.args[2])
+        db["subscriptions"].append({"name": n, "val": v, "day": d})
+        save_db(db)
+        await update.message.reply_text("✅ Conta salva!")
+    except: 
+        await update.message.reply_text("Erro. Use: `/sub Nome Valor Dia`")
+
+async def sub_del_menu(update, context): 
+    db["subscriptions"] = []
+    save_db(db)
+    await menu_subs(update, context)
+
+# --- IA HANDLER CORRIGIDO ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
     msg = update.message; wait = await msg.reply_text("🧠..."); now = get_now()
     
-    # Prompt com ordem estrita
-    prompt = f"""SYSTEM: Você é um extrator de dados. 
-    Se receber áudio, transcreva e extraia os dados.
-    NUNCA responda conversando. Responda APENAS JSON.
-    Data: {now}.
+    # Prompt mais estrito
+    prompt = f"""You are a JSON data extractor.
+    Analyze the user input (audio transcription or text).
+    Extract financial data into this JSON structure.
+    Do NOT chat. Do NOT say 'Here is the JSON'. Just output the JSON string.
+    Date: {now}.
     
-    Exemplos:
-    {{"type":"mercado", "item":"leite"}}
-    {{"type":"gasto", "val":50.50, "cat":"Transporte", "desc":"Uber"}}
-    """
+    Examples:
+    Input: "Gastei 50 no mercado" -> Output: {{"type":"gasto", "val":50.00, "cat":"Mercado", "desc":"Mercado"}}
+    Input: "Recebi 100 de venda" -> Output: {{"type":"ganho", "val":100.00, "cat":"Vendas", "desc":"Venda"}}
+    Input: "O que comprar?" -> Output: {{"type":"conversa", "msg":"Resposta da IA"}}
+    
+    User Input:"""
     
     content = [prompt]
     if msg.voice or msg.audio:
         try:
-            # Baixa e envia o áudio
             fid = (msg.voice or msg.audio).file_id
             f_obj = await context.bot.get_file(fid)
             f_path = f"audio_{uuid.uuid4()}.ogg"
@@ -633,13 +659,11 @@ async def smart_entry(update, context):
             myfile = genai.upload_file(f_path)
             while myfile.state.name == "PROCESSING": time.sleep(1); myfile = genai.get_file(myfile.name)
             content.append(myfile)
-            content.append("Transcreva este áudio e formate em JSON.")
         except: await wait.edit_text("Erro no áudio. Tente texto."); return
     elif msg.photo:
         f = await context.bot.get_file(msg.photo[-1].file_id); d = await f.download_as_bytearray()
         content.append({"mime_type": "image/jpeg", "data": bytes(d)})
-        content.append("Extraia o valor da nota.")
-    else: content.append(f"User: {msg.text}")
+    else: content.append(f"{msg.text}")
         
     try:
         resp = model_ai.generate_content(content)
@@ -654,21 +678,21 @@ async def smart_entry(update, context):
                     save_db(db); await wait.edit_text(f"✅ R$ {data['val']:.2f} ({data.get('desc')})"); return
                 if data.get('msg'): await wait.edit_text(data['msg']); return
         
-        await wait.edit_text(t)
+        await wait.edit_text(t) # Fallback se não for JSON
     except Exception as e: await wait.edit_text(f"Erro IA: {e}")
 
 # ================= MAIN =================
 def main():
-    print("🚀 V113 FINAL REPAIR ONLINE...")
+    print("🚀 V114 FINAL STABLE ONLINE...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "V113 OK"
+    def home(): return "V114 OK"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("cancel", cancel_op))
-    app_bot.add_handler(CommandHandler("sub", sub_cmd))
+    app_bot.add_handler(CommandHandler("sub", sub_cmd)) # AGORA VAI
     
     # Handlers
     app_bot.add_handler(ConversationHandler(
@@ -677,12 +701,11 @@ def main():
         fallbacks=[CommandHandler("start", start)]
     ))
     
-    # DÍVIDAS (CORRIGIDO: "da_" agora é um entry_point)
     app_bot.add_handler(ConversationHandler(
         entry_points=[
             CallbackQueryHandler(add_person_start, pattern="^add_p"), 
             CallbackQueryHandler(c_add, pattern="^c_add"),
-            CallbackQueryHandler(debt_action, pattern="^da_") # CORREÇÃO: Botão +/- ativa a conversa
+            CallbackQueryHandler(debt_action, pattern="^da_")
         ],
         states={
             DEBT_NAME:[MessageHandler(filters.TEXT, save_person_name)], 
@@ -733,7 +756,7 @@ def main():
     scheduler.add_job(routine_checks, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V113 FINAL REPAIR ONLINE!")
+    print("✅ V114 FINAL STABLE ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
