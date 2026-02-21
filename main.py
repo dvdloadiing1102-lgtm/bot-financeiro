@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v115.json"
+DB_FILE = "finance_v116.json"
 
 # ESTADOS CONVERSATION
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION, 
@@ -55,7 +55,7 @@ DB_FILE = "finance_v115.json"
 
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6']
 plt.style.use('dark_background')
-MY_PIX_KEY = "21998121271"
+MY_PIX_KEY = "21998121271" # SUA CHAVE PIX DA FOTO
 
 # ================= 3. IA SETUP =================
 model_ai = None
@@ -92,6 +92,7 @@ def load_db():
             if "goals" not in data: data["goals"] = []
             if "achievements" not in data: data["achievements"] = []
             if "subscriptions" not in data: data["subscriptions"] = []
+            if "reminders" not in data: data["reminders"] = []
             if "Vendas/IPTV" not in data["categories"]["ganho"]: data["categories"]["ganho"].append("Vendas/IPTV")
             return data
     except: return default
@@ -127,12 +128,13 @@ async def routine_checks(context):
     now = get_now()
     now_str = now.strftime("%Y-%m-%d %H:%M")
     
-    # 1. Agenda
+    # 1. Agenda (Disparo de Lembretes)
     to_remove = []
     if "reminders" in db and db["reminders"]:
         for i, rem in enumerate(db["reminders"]):
             if rem["time"] == now_str:
-                try: await context.bot.send_message(chat_id=rem["chat_id"], text=f"⏰ **LEMBRETE!**\n\n📌 {rem['text']}", parse_mode="Markdown")
+                try: 
+                    await context.bot.send_message(chat_id=ADMIN_ID, text=f"⏰ **AGENDA ({rem['time']})**\n\n📌 {rem['text']}", parse_mode="Markdown")
                 except: pass
                 to_remove.append(i)
         if to_remove:
@@ -193,7 +195,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V115 (INTEGRAL)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V116 (AGENDA+IPTV)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -365,11 +367,37 @@ async def iptv_edit_save(update, context):
             else: c[field]=val
     save_db(db); await update.message.reply_text("✅ Feito!"); return await start(update, context)
 
+# --- TEXTO DA FOTO (CORRIGIDO PARA O SEU PADRÃO) ---
 async def iptv_gen_msg(update, context):
-    cid = update.callback_query.data.replace("iptv_msg_", ""); client = next((c for c in db["iptv_clients"] if c["id"] == cid), None); now = get_now()
-    dia = int(client['day']); m = now.month + 1 if now.day > dia else now.month
-    txt = f"Olá {client['name']}\nSUA CONTA VENCE EM: {dia:02d}/{m:02d}\n\nEvite bloqueio. Pix: {MY_PIX_KEY}\nEnvie o comprovante."
-    await update.callback_query.message.reply_text(f"`{txt}`", parse_mode="Markdown"); await update.callback_query.answer()
+    cid = update.callback_query.data.replace("iptv_msg_", "")
+    client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
+    now = get_now()
+    dia = int(client['day'])
+    m = now.month + 1 if now.day > dia else now.month
+    ano = now.year + 1 if m == 1 and now.month == 12 else now.year
+    data_formatada = f"{dia:02d}/{m:02d}/{ano}"
+    
+    txt = f"""Olá querido(a) cliente {client['name']}
+
+SUA CONTA EXPIRA EM BREVE!
+
+Seu plano vence em:
+{data_formatada}
+
+Evite o bloqueio automático do seu sinal
+
+Para renovar o seu plano agora, faça o
+pix no seguinte pix:
+
+Pix: {MY_PIX_KEY}
+
+Por favor, nos envie o comprovante de
+pagamento assim que possível.
+
+É sempre um prazer te atender."""
+    
+    await update.callback_query.message.reply_text(f"`{txt}`", parse_mode="Markdown")
+    await update.callback_query.answer()
 
 async def iptv_kill(update, context): 
     cid = update.callback_query.data.replace("iptv_kill_", ""); db["iptv_clients"] = [c for c in db["iptv_clients"] if c["id"] != cid]; save_db(db); await update.callback_query.answer("🗑️"); await iptv_list(update, context)
@@ -426,7 +454,7 @@ async def c_save(update, context): db["categories"][context.user_data["nt"]].app
 async def c_del(update, context): kb=[[InlineKeyboardButton(c, callback_data=f"kc_gasto_{c}")] for c in db["categories"]["gasto"]]; kb.append([InlineKeyboardButton("🔙", callback_data="back")]); await update.callback_query.edit_message_text("Del:", reply_markup=InlineKeyboardMarkup(kb))
 async def c_kill(update, context): _, t, n = update.callback_query.data.split("_"); db["categories"][t].remove(n); save_db(db); await update.callback_query.edit_message_text("Del!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 
-# ================= CONFIG / PERSONA / SUBS (REINSERIDO) =================
+# ================= CONFIG / PERSONA / SUBS =================
 async def menu_conf(update, context):
     p = "🔴" if db["config"]["panic_mode"] else "🟢"; persona_atual = db["config"].get("persona", "padrao").title()
     kb = [[InlineKeyboardButton(f"Pânico: {p}", callback_data="tg_panic"), InlineKeyboardButton(f"🎭 IA: {persona_atual}", callback_data="menu_persona")], [InlineKeyboardButton("🔔 Assinaturas", callback_data="menu_subs")], [InlineKeyboardButton("🔙", callback_data="back")]]
@@ -442,7 +470,12 @@ async def sub_cmd(update, context):
     except: await update.message.reply_text("Erro. Use: `/sub Nome Valor Dia`")
 async def sub_del_menu(update, context): db["subscriptions"] = []; save_db(db); await menu_subs(update, context)
 
-async def menu_agenda(update, context): txt="\n".join([r['text'] for r in db["reminders"]]); await update.callback_query.edit_message_text(f"Agenda:\n{txt}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Limpar", callback_data="del_agenda_all"), InlineKeyboardButton("🔙", callback_data="back")]]))
+# --- AGENDA (FIXED) ---
+async def menu_agenda(update, context): 
+    rems = db.get("reminders", [])
+    if not rems: txt = "_Nenhum lembrete._"
+    else: txt = "\n".join([f"• {r['time']}: {r['text']}" for r in rems])
+    await update.callback_query.edit_message_text(f"⏰ **AGENDA:**\n\n{txt}\n\n_Para adicionar, fale: 'Me lembre de pagar X amanhã'_", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Limpar", callback_data="del_agenda_all"), InlineKeyboardButton("🔙", callback_data="back")]], parse_mode="Markdown"))
 async def agenda_del(update, context): db["reminders"]=[]; save_db(db); await start(update, context)
 async def menu_help(update, context): await update.callback_query.edit_message_text("Ajuda: Use o menu.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def backup(update, context): 
@@ -459,6 +492,7 @@ async def smart_entry(update, context):
     Date: {now}. Examples:
     Input: "Gastei 50 mercado" -> {{"type":"gasto", "val":50.0, "cat":"Mercado", "desc":"Mercado"}}
     Input: "Recebi 100" -> {{"type":"ganho", "val":100.0, "cat":"Extra", "desc":"Extra"}}
+    Input: "Me lembre de pagar a luz dia 20 às 14h" -> {{"type":"agenda", "text":"Pagar a luz", "time":"2026-MM-20 14:00"}}
     User Input:"""
     content = [prompt]
     if msg.voice or msg.audio:
@@ -478,6 +512,9 @@ async def smart_entry(update, context):
         if start != -1 and end != -1:
             data = json.loads(t[start:end+1])
             if data:
+                if data.get('type') == 'agenda': 
+                    db["reminders"].append({"text": data['text'], "time": data['time'], "chat_id": update.effective_chat.id})
+                    save_db(db); await wait.edit_text(f"⏰ Agendado: {data['text']} para {data['time']}"); return
                 if data.get('type') == 'mercado': db["shopping_list"].append(data['item']); save_db(db); await wait.edit_text(f"🛒 {data['item']}"); return
                 if 'val' in data: 
                     db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":data['type'], "value":float(data['val']), "category":data.get('cat','Geral'), "description":data.get('desc','IA'), "date":now.strftime("%d/%m/%Y %H:%M")})
@@ -488,10 +525,10 @@ async def smart_entry(update, context):
 
 # ================= MAIN =================
 def main():
-    print("🚀 V115 INTEGRAL ONLINE...")
+    print("🚀 V116 AGENDA+IPTV ONLINE...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "V115 OK"
+    def home(): return "V116 OK"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -548,7 +585,7 @@ def main():
     scheduler.add_job(routine_checks, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V115 INTEGRAL ONLINE!")
+    print("✅ V116 AGENDA+IPTV ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
