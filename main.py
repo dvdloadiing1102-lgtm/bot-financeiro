@@ -47,11 +47,11 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v111.json"
+DB_FILE = "finance_v112.json"
 
 # ESTADOS CONVERSATION
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION, 
- IPTV_NAME, IPTV_PHONE, IPTV_DAY, IPTV_VAL, IPTV_EDIT_VAL, GOAL_NAME, GOAL_VAL) = range(16)
+ IPTV_NAME, IPTV_PHONE, IPTV_DAY, IPTV_VAL, IPTV_EDIT_VAL, GOAL_NAME, GOAL_VAL, DEBT_INIT_VAL) = range(17)
 
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6']
 plt.style.use('dark_background')
@@ -88,7 +88,6 @@ def load_db():
     try:
         with open(DB_FILE, "r") as f: 
             data = json.load(f)
-            # Garantir chaves novas
             if "iptv_clients" not in data: data["iptv_clients"] = []
             if "goals" not in data: data["goals"] = []
             if "achievements" not in data: data["achievements"] = []
@@ -198,7 +197,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V111 (FINAL)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V112 (FIXED)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -343,6 +342,8 @@ async def rep_evo(update, context):
         val = sum(t['value'] for t in db["transactions"] if t['type']=='gasto' and m in t['date'])
         d.append(val)
         l.append(m[:2])
+    
+    plt.clf() # CORREÇÃO: Limpa o gráfico anterior
     plt.figure(figsize=(6, 4))
     plt.plot(l, d, marker='o', color='#00ffcc')
     plt.grid(alpha=0.3)
@@ -502,15 +503,34 @@ async def reg_fin(update, context):
     else: await update.message.reply_text(msg)
     return await start(update, context)
 
-# OUTROS MENUS
+# OUTROS MENUS (CORREÇÃO DIVIDAS: PEDE VALOR LOGO)
 async def menu_debts(update, context): 
     txt="🧾 Dívidas:"
     kb=[[InlineKeyboardButton(f"{n}: {v}", callback_data=f"ed_{n}")] for n,v in db.get("debts_v2", {}).items()]
     kb.append([InlineKeyboardButton("➕ Add", callback_data="add_p"), InlineKeyboardButton("🔙", callback_data="back")])
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 
-async def add_person_start(update, context): await update.callback_query.edit_message_text("Nome:"); return DEBT_NAME
-async def save_person_name(update, context): db["debts_v2"][update.message.text] = 0.0; save_db(db); await update.message.reply_text("Salvo!"); return await start(update, context)
+async def add_person_start(update, context): 
+    await update.callback_query.edit_message_text("Nome da Pessoa:")
+    return DEBT_NAME
+
+async def save_person_name(update, context): 
+    context.user_data["new_debt_name"] = update.message.text
+    await update.message.reply_text(f"Quanto {update.message.text} deve? (Digite 0 se nada)")
+    return DEBT_INIT_VAL
+
+async def save_person_val(update, context):
+    try:
+        val = float(update.message.text.replace(',', '.'))
+        name = context.user_data["new_debt_name"]
+        db["debts_v2"][name] = val
+        save_db(db)
+        await update.message.reply_text("✅ Salvo!")
+        return await start(update, context)
+    except:
+        await update.message.reply_text("Valor inválido. Tente de novo:")
+        return DEBT_INIT_VAL
+
 async def edit_debt_menu(update, context): context.user_data["dn"] = update.callback_query.data.replace("ed_", ""); kb=[[InlineKeyboardButton("➕ Emprestei", callback_data="da_add"), InlineKeyboardButton("➖ Pagou", callback_data="da_sub")], [InlineKeyboardButton("🗑️", callback_data="da_del"), InlineKeyboardButton("🔙", callback_data="menu_debts")]]; await update.callback_query.edit_message_text(f"👤 {context.user_data['dn']}", reply_markup=InlineKeyboardMarkup(kb))
 async def debt_action(update, context): 
     act=update.callback_query.data
@@ -545,7 +565,12 @@ async def rep_pie(update, context):
     m=get_now().strftime("%m/%Y")
     for t in db["transactions"]: 
         if t['type']=='gasto' and m in t['date']: cats[t['category']]=cats.get(t['category'],0)+t['value']
-    if not cats: return
+    
+    if not cats:
+        await update.callback_query.message.reply_text("Sem dados para este mês.")
+        return
+
+    plt.clf() # CORREÇÃO: Limpa memória antes
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=COLORS)
     ax.legend(cats.keys(), loc="best")
@@ -572,7 +597,6 @@ async def c_save(update, context): db["categories"][context.user_data["nt"]].app
 async def c_del(update, context): kb=[[InlineKeyboardButton(c, callback_data=f"kc_gasto_{c}")] for c in db["categories"]["gasto"]]; kb.append([InlineKeyboardButton("🔙", callback_data="back")]); await update.callback_query.edit_message_text("Del:", reply_markup=InlineKeyboardMarkup(kb))
 async def c_kill(update, context): _, t, n = update.callback_query.data.split("_"); db["categories"][t].remove(n); save_db(db); await update.callback_query.edit_message_text("Del!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 
-# CONFIGS RESTAURADAS
 async def menu_conf(update, context):
     p = "🔴" if db["config"]["panic_mode"] else "🟢"
     persona_atual = db["config"].get("persona", "padrao").title()
@@ -617,45 +641,57 @@ async def backup(update, context):
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def roleta(update, context): await update.callback_query.edit_message_text("Girar", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Girar", callback_data="roleta"), InlineKeyboardButton("🔙", callback_data="back")]]))
 
-# --- IA HANDLER ---
+# --- IA HANDLER CORRIGIDO ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
     msg = update.message; wait = await msg.reply_text("🧠..."); now = get_now()
     
-    prompt = f"""AGORA: {now}. Responda JSON.
-    - OCR (Foto Nota Fiscal): {{"type":"gasto", "val":100.00, "cat":"Mercado", "desc":"Compras Mes"}}
-    - Mercado: {{"type":"mercado", "item":"leite"}}
-    - Gasto: {{"type":"gasto", "val":50, "cat":"Lazer", "desc":"Cinema"}}
-    - Conversa: {{"type":"conversa", "msg":"Resposta"}}"""
+    # Prompt mais estrito para evitar erro de JSON
+    prompt = f"""SYSTEM: Você é um processador de dados JSON.
+    Não responda com texto. Apenas JSON.
+    Data atual: {now}.
+    
+    Exemplos de saída:
+    {{"type":"mercado", "item":"leite"}}
+    {{"type":"gasto", "val":50.50, "cat":"Transporte", "desc":"Uber"}}
+    {{"type":"conversa", "msg":"Sua resposta aqui"}}
+    
+    Entrada do usuário:"""
     
     content = [prompt]
     if msg.photo:
         f = await context.bot.get_file(msg.photo[-1].file_id); d = await f.download_as_bytearray()
         content.append({"mime_type": "image/jpeg", "data": bytes(d)})
-        content.append("Analise esta imagem. Se for nota fiscal, extraia o total.")
-    else: content.append(f"User: {msg.text}")
+        content.append("Extraia o valor total da nota fiscal.")
+    else: content.append(f"{msg.text}")
         
     try:
         resp = model_ai.generate_content(content)
-        t = resp.text; data = None
-        if "{" in t: data = json.loads(t[t.find("{"):t.rfind("}")+1])
+        t = resp.text
+        # Tenta limpar o JSON se vier sujo
+        start_idx = t.find("{")
+        end_idx = t.rfind("}") + 1
+        if start_idx != -1 and end_idx != -1:
+            json_str = t[start_idx:end_idx]
+            data = json.loads(json_str)
+            
+            if data:
+                if data.get('type') == 'mercado': db["shopping_list"].append(data['item']); save_db(db); await wait.edit_text(f"🛒 {data['item']}"); return
+                if 'val' in data: 
+                    db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":data['type'], "value":float(data['val']), "category":data.get('cat','Geral'), "description":data.get('desc','IA'), "date":now.strftime("%d/%m/%Y %H:%M")})
+                    save_db(db); await wait.edit_text(f"✅ R$ {data['val']:.2f} ({data.get('desc')})"); return
+                if data.get('msg'): await wait.edit_text(data['msg']); return
         
-        if data:
-            if data.get('type') == 'mercado': db["shopping_list"].append(data['item']); save_db(db); await wait.edit_text(f"🛒 {data['item']}"); return
-            if 'val' in data: 
-                db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":data['type'], "value":float(data['val']), "category":data.get('cat','Geral'), "description":data.get('desc','IA'), "date":now.strftime("%d/%m/%Y %H:%M")})
-                save_db(db); await wait.edit_text(f"✅ R$ {data['val']:.2f} ({data.get('desc')})"); return
-            if data.get('msg'): await wait.edit_text(data['msg']); return
         await wait.edit_text(t)
-    except Exception as e: await wait.edit_text(f"Erro: {e}")
+    except Exception as e: await wait.edit_text(f"Erro IA: {e}")
 
 # ================= MAIN =================
 def main():
-    print("🚀 V111 FINAL FIX ONLINE...")
+    print("🚀 V112 STABLE ONLINE...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "V111 OK"
+    def home(): return "V112 OK"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -672,7 +708,13 @@ def main():
     
     app_bot.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(add_person_start, pattern="^add_p"), CallbackQueryHandler(c_add, pattern="^c_add")],
-        states={DEBT_NAME:[MessageHandler(filters.TEXT, save_person_name)], DEBT_VAL:[MessageHandler(filters.TEXT, debt_save_val)], CAT_ADD_TYPE:[CallbackQueryHandler(c_type)], CAT_ADD_NAME:[MessageHandler(filters.TEXT, c_save)]},
+        states={
+            DEBT_NAME:[MessageHandler(filters.TEXT, save_person_name)], 
+            DEBT_INIT_VAL:[MessageHandler(filters.TEXT, save_person_val)], # NOVO ESTADO
+            DEBT_VAL:[MessageHandler(filters.TEXT, debt_save_val)], 
+            CAT_ADD_TYPE:[CallbackQueryHandler(c_type)], 
+            CAT_ADD_NAME:[MessageHandler(filters.TEXT, c_save)]
+        },
         fallbacks=[CommandHandler("start", start)]
     ))
 
@@ -715,7 +757,7 @@ def main():
     scheduler.add_job(routine_checks, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V111 FINAL FIX ONLINE!")
+    print("✅ V112 STABLE ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
