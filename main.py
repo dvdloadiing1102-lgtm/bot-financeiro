@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v110.json"
+DB_FILE = "finance_v111.json"
 
 # ESTADOS CONVERSATION
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION, 
@@ -88,9 +88,11 @@ def load_db():
     try:
         with open(DB_FILE, "r") as f: 
             data = json.load(f)
+            # Garantir chaves novas
             if "iptv_clients" not in data: data["iptv_clients"] = []
             if "goals" not in data: data["goals"] = []
             if "achievements" not in data: data["achievements"] = []
+            if "subscriptions" not in data: data["subscriptions"] = []
             if "Vendas/IPTV" not in data["categories"]["ganho"]: data["categories"]["ganho"].append("Vendas/IPTV")
             return data
     except: return default
@@ -196,7 +198,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V110 (FIXED)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V111 (FINAL)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -254,7 +256,7 @@ async def menu_badges(update, context):
     
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
 
-# ================= RELATÓRIOS NOVOS =================
+# ================= RELATÓRIOS COMPLETOS =================
 async def menu_reports(update, context): 
     kb = [
         [InlineKeyboardButton("🏆 Ranking Gastos", callback_data="rep_rank"), InlineKeyboardButton("📉 Comparativo Mês", callback_data="rep_comp")],
@@ -306,7 +308,6 @@ async def rep_forecast(update, context):
     now = get_now()
     d7 = now + timedelta(days=7)
     d30 = now + timedelta(days=30)
-    
     val7 = 0
     val30 = 0
     
@@ -316,7 +317,6 @@ async def rep_forecast(update, context):
             val = c.get('value', 0)
             prox_venc = datetime(now.year, now.month, dia_venc)
             if prox_venc < now: prox_venc += relativedelta(months=1)
-            
             if prox_venc <= d7: val7 += val
             if prox_venc <= d30: val30 += val
         except: pass
@@ -324,7 +324,6 @@ async def rep_forecast(update, context):
     txt = f"🔮 **VIDENTE IPTV (FLUXO DE CAIXA)**\n\n💰 **Próximos 7 Dias:** R$ {val7:.2f}\n💰 **Próximos 30 Dias:** R$ {val30:.2f}\n\n_Use isso para planejar suas contas!_"
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
-# RESTAURANDO FUNÇÕES PERDIDAS
 async def rep_csv(update, context):
     await update.callback_query.answer("Gerando CSV...")
     with open("relatorio.csv", "w", newline='', encoding='utf-8-sig') as f:
@@ -573,8 +572,43 @@ async def c_save(update, context): db["categories"][context.user_data["nt"]].app
 async def c_del(update, context): kb=[[InlineKeyboardButton(c, callback_data=f"kc_gasto_{c}")] for c in db["categories"]["gasto"]]; kb.append([InlineKeyboardButton("🔙", callback_data="back")]); await update.callback_query.edit_message_text("Del:", reply_markup=InlineKeyboardMarkup(kb))
 async def c_kill(update, context): _, t, n = update.callback_query.data.split("_"); db["categories"][t].remove(n); save_db(db); await update.callback_query.edit_message_text("Del!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 
-async def menu_conf(update, context): kb=[[InlineKeyboardButton(f"Pânico: {db['config']['panic_mode']}", callback_data="tg_panic")], [InlineKeyboardButton("🔙", callback_data="back")]]; await update.callback_query.edit_message_text("Config:", reply_markup=InlineKeyboardMarkup(kb))
+# CONFIGS RESTAURADAS
+async def menu_conf(update, context):
+    p = "🔴" if db["config"]["panic_mode"] else "🟢"
+    persona_atual = db["config"].get("persona", "padrao").title()
+    kb = [
+        [InlineKeyboardButton(f"Pânico: {p}", callback_data="tg_panic"), InlineKeyboardButton(f"🎭 IA: {persona_atual}", callback_data="menu_persona")],
+        [InlineKeyboardButton("🔔 Assinaturas", callback_data="menu_subs")],
+        [InlineKeyboardButton("🔙", callback_data="back")]
+    ]
+    await update.callback_query.edit_message_text("⚙️ **Configurações:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
 async def tg_panic(update, context): db["config"]["panic_mode"] = not db["config"]["panic_mode"]; save_db(db); await menu_conf(update, context)
+
+# PERSONAS E ASSINATURAS (RESTAURADOS)
+async def menu_persona(update, context): 
+    kb = [[InlineKeyboardButton("🧔🏿‍♂️ Julius", callback_data="sp_julius"), InlineKeyboardButton("🤡 Zoeiro", callback_data="sp_zoeiro")], [InlineKeyboardButton("👔 Padrão", callback_data="sp_padrao")], [InlineKeyboardButton("🔙", callback_data="menu_conf")]]
+    await update.callback_query.edit_message_text("🎭 **Personalidade da IA:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def set_persona(update, context): 
+    db["config"]["persona"] = update.callback_query.data.replace("sp_", "")
+    save_db(db)
+    await update.callback_query.answer("Atualizado!")
+    await menu_conf(update, context)
+
+async def menu_subs(update, context):
+    subs = db.get("subscriptions", [])
+    txt = f"🔔 **ASSINATURAS**\nTotal: **R$ {sum(float(s['val']) for s in subs):.2f}**\n\n"
+    if subs: txt += "\n".join([f"• {s['name']} (Dia {s['day']}): R$ {s['val']}" for s in subs])
+    kb = [[InlineKeyboardButton("➕ Add (/sub)", callback_data="sub_add"), InlineKeyboardButton("🗑️ Del", callback_data="sub_del")], [InlineKeyboardButton("🔙", callback_data="menu_conf")]]
+    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def sub_add_help(update, context): await update.callback_query.answer(); await update.callback_query.message.reply_text("Use:\n`/sub Netflix 55.90 15`")
+async def sub_cmd(update, context):
+    try: n, v, d = context.args[0], float(context.args[1].replace(',', '.')), int(context.args[2]); db["subscriptions"].append({"name": n, "val": v, "day": d}); save_db(db); await update.message.reply_text("✅ Conta salva!")
+    except: await update.message.reply_text("Erro. Use: `/sub Nome Valor Dia`")
+async def sub_del_menu(update, context): db["subscriptions"] = []; save_db(db); await menu_subs(update, context)
+
 async def menu_agenda(update, context): txt="\n".join([r['text'] for r in db["reminders"]]); await update.callback_query.edit_message_text(f"Agenda:\n{txt}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Limpar", callback_data="del_agenda_all"), InlineKeyboardButton("🔙", callback_data="back")]]))
 async def agenda_del(update, context): db["reminders"]=[]; save_db(db); await start(update, context)
 async def menu_help(update, context): await update.callback_query.edit_message_text("Ajuda: Use o menu.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
@@ -618,15 +652,16 @@ async def smart_entry(update, context):
 
 # ================= MAIN =================
 def main():
-    print("🚀 V110 FIXED ONLINE...")
+    print("🚀 V111 FINAL FIX ONLINE...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "V110 OK"
+    def home(): return "V111 OK"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("cancel", cancel_op))
+    app_bot.add_handler(CommandHandler("sub", sub_cmd))
     
     # Handlers
     app_bot.add_handler(ConversationHandler(
@@ -666,7 +701,7 @@ def main():
            ("menu_manage_trans", menu_manage_trans), ("del_tr_", delete_transaction_confirm),
            ("menu_agenda", menu_agenda), ("del_agenda_all", agenda_del),
            ("menu_cats", menu_cats), ("c_del", c_del), ("kc_", c_kill),
-           ("menu_conf", menu_conf), ("tg_panic", tg_panic), ("menu_persona", menu_persona), ("sp_", set_persona), ("sub_add", sub_add_help), ("sub_del", sub_del_menu),
+           ("menu_conf", menu_conf), ("tg_panic", tg_panic), ("menu_persona", menu_persona), ("sp_", set_persona), ("menu_subs", menu_subs), ("sub_add", sub_add_help), ("sub_del", sub_del_menu),
            ("roleta", roleta), ("menu_help", menu_help), ("backup", backup), ("admin_panel", admin_panel), ("undo_quick", undo_quick),
            ("ed_", edit_debt_menu), ("da_", debt_action), ("sc_", reg_cat),
            ("menu_iptv", menu_iptv), ("iptv_list", iptv_list), ("iptv_manage_", iptv_manage_client), 
@@ -680,7 +715,7 @@ def main():
     scheduler.add_job(routine_checks, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V110 FIXED ONLINE!")
+    print("✅ V111 FINAL FIX ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
