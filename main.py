@@ -46,7 +46,7 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v108.json"
+DB_FILE = "finance_v109.json"
 
 # ESTADOS CONVERSATION
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION, 
@@ -121,7 +121,6 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# --- VERIFICAÇÕES AUTOMÁTICAS ---
 async def routine_checks(context):
     now = get_now()
     now_str = now.strftime("%Y-%m-%d %H:%M")
@@ -146,7 +145,9 @@ async def routine_checks(context):
     if now.minute == 30: await check_achievements(context)
 
 async def check_iptv_due(context):
-    now = get_now(); amanha = now + timedelta(days=1); clientes = []
+    now = get_now()
+    amanha = now + timedelta(days=1)
+    clientes = []
     for c in db["iptv_clients"]:
         try:
             if int(c["day"]) == amanha.day: clientes.append(c)
@@ -164,7 +165,6 @@ async def perform_auto_backup(context):
 async def check_achievements(context):
     if not ADMIN_ID: return
     new_badge = None
-    # Lógica de Gamificação
     if len(db["iptv_clients"]) >= 5 and "ip_baron" not in db["achievements"]:
         db["achievements"].append("ip_baron"); new_badge = "👑 **Barão do IPTV** (5+ Clientes)"
     if len(db["iptv_clients"]) >= 20 and "ip_king" not in db["achievements"]:
@@ -180,7 +180,9 @@ async def check_achievements(context):
 
 # ================= 6. INTERFACE =================
 async def start(update, context):
-    context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
+    context.user_data.clear()
+    saldo, gastos = calc_stats()
+    uid = update.effective_user.id
     status, msg_vip = is_vip(uid)
     kb_inline = [
         [InlineKeyboardButton("📺 Gestão IPTV", callback_data="menu_iptv"), InlineKeyboardButton("🎯 Metas", callback_data="menu_goals")],
@@ -193,7 +195,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V108 (ULTIMATE)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V109 (STABLE)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -208,7 +210,7 @@ async def back(update, context):
 async def cancel_op(update, context):
     await update.message.reply_text("🚫 Cancelado."); return ConversationHandler.END
 
-# ================= METAS (NOVO) =================
+# ================= METAS =================
 async def menu_goals(update, context):
     saldo, _ = calc_stats()
     txt = f"🎯 **METAS FINANCEIRAS**\nSeu saldo disponível: R$ {saldo:.2f}\n\n"
@@ -229,11 +231,13 @@ async def goal_save_val(update, context):
     try:
         v = float(update.message.text.replace(',', '.'))
         db["goals"].append({"name": context.user_data["gn"], "val": v})
-        save_db(db); await update.message.reply_text("✅ Meta Salva!"); return await start(update, context)
+        save_db(db)
+        await update.message.reply_text("✅ Meta Salva!")
+        return await start(update, context)
     except: await update.message.reply_text("Erro valor."); return GOAL_VAL
 async def goal_del(update, context): db["goals"] = []; save_db(db); await menu_goals(update, context)
 
-# ================= CONQUISTAS (NOVO) =================
+# ================= CONQUISTAS =================
 async def menu_badges(update, context):
     badges = db.get("achievements", [])
     txt = "🏆 **SUAS CONQUISTAS:**\n\n"
@@ -249,7 +253,7 @@ async def menu_badges(update, context):
     
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
 
-# ================= RELATÓRIOS NOVOS (RANKING & COMPARATIVO) =================
+# ================= RELATÓRIOS NOVOS =================
 async def menu_reports(update, context): 
     kb = [
         [InlineKeyboardButton("🏆 Ranking Gastos", callback_data="rep_rank"), InlineKeyboardButton("📉 Comparativo Mês", callback_data="rep_comp")],
@@ -263,11 +267,10 @@ async def menu_reports(update, context):
 async def rep_rank(update, context):
     await update.callback_query.answer("Calculando...")
     m = get_now().strftime("%m/%Y")
-    # Agrupa por descrição (quem gastou)
     rank = {}
     for t in db["transactions"]:
         if t['type'] == 'gasto' and m in t['date']:
-            k = t.get('description', t['category']) # Usa descriçao se tiver, senao categoria
+            k = t.get('description', t['category'])
             rank[k] = rank.get(k, 0) + t['value']
     
     sorted_rank = sorted(rank.items(), key=lambda item: item[1], reverse=True)[:5]
@@ -298,7 +301,6 @@ async def rep_comp(update, context):
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
 async def rep_forecast(update, context):
-    # Previsão IPTV
     now = get_now()
     d7 = now + timedelta(days=7)
     d30 = now + timedelta(days=30)
@@ -310,9 +312,6 @@ async def rep_forecast(update, context):
         try:
             dia_venc = int(c['day'])
             val = c.get('value', 0)
-            
-            # Logica simplificada de vencimento próximo
-            # Assume que todo mes vence naquele dia
             prox_venc = datetime(now.year, now.month, dia_venc)
             if prox_venc < now: prox_venc += relativedelta(months=1)
             
@@ -323,7 +322,7 @@ async def rep_forecast(update, context):
     txt = f"🔮 **VIDENTE IPTV (FLUXO DE CAIXA)**\n\n💰 **Próximos 7 Dias:** R$ {val7:.2f}\n💰 **Próximos 30 Dias:** R$ {val30:.2f}\n\n_Use isso para planejar suas contas!_"
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
-# ================= MÓDULO IPTV (MANTIDO V107) =================
+# ================= MÓDULO IPTV =================
 async def menu_iptv(update, context):
     total = len(db["iptv_clients"])
     receita = sum(c.get("value", 0) for c in db["iptv_clients"])
@@ -341,79 +340,189 @@ async def iptv_save_val(update, context):
     try:
         v = float(update.message.text.replace(',', '.'))
         c = {"id": str(uuid.uuid4())[:8], "name": context.user_data["vn"], "phone": context.user_data["vp"], "day": context.user_data["vd"], "value": v}
-        db["iptv_clients"].append(c); save_db(db); await update.message.reply_text(f"✅ Salvo!"); return await start(update, context)
+        db["iptv_clients"].append(c)
+        save_db(db)
+        await update.message.reply_text(f"✅ Salvo!")
+        return await start(update, context)
     except: await update.message.reply_text("❌ Valor inválido."); return IPTV_VAL
 async def iptv_list(update, context):
     if not db["iptv_clients"]: await update.callback_query.edit_message_text("Vazio.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_iptv")]])); return
-    kb = []; sorted_clients = sorted(db["iptv_clients"], key=lambda x: int(x['day']))
-    for c in sorted_clients: kb.append([InlineKeyboardButton(f"{c['day']:02d} | {c['name']} (R$ {c.get('value',0):.0f})", callback_data=f"iptv_manage_{c['id']}")])
-    kb.append([InlineKeyboardButton("🔙", callback_data="menu_iptv")]); await update.callback_query.edit_message_text("📋 **Clientes:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    kb = []
+    sorted_clients = sorted(db["iptv_clients"], key=lambda x: int(x['day']))
+    for c in sorted_clients: 
+        kb.append([InlineKeyboardButton(f"{c['day']:02d} | {c['name']} (R$ {c.get('value',0):.0f})", callback_data=f"iptv_manage_{c['id']}")])
+    kb.append([InlineKeyboardButton("🔙", callback_data="menu_iptv")])
+    await update.callback_query.edit_message_text("📋 **Clientes:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
 async def iptv_manage_client(update, context):
-    cid = update.callback_query.data.replace("iptv_manage_", ""); client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
+    cid = update.callback_query.data.replace("iptv_manage_", "")
+    client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
     if not client: await iptv_list(update, context); return
-    msg = f"👤 **{client['name']}**\nVence dia {client['day']}\nPlano: R$ {client.get('value',0):.2f}"; kb = [[InlineKeyboardButton("✅ PAGOU", callback_data=f"iptv_pay_{cid}")], [InlineKeyboardButton("💰 Cobrar", callback_data=f"iptv_msg_{cid}")], [InlineKeyboardButton("✏️ Editar", callback_data=f"iptv_edit_menu_{cid}"), InlineKeyboardButton("❌ Del", callback_data=f"iptv_kill_{cid}")], [InlineKeyboardButton("🔙", callback_data="iptv_list")]]
+    msg = f"👤 **{client['name']}**\nVence dia {client['day']}\nPlano: R$ {client.get('value',0):.2f}"
+    kb = [
+        [InlineKeyboardButton("✅ PAGOU", callback_data=f"iptv_pay_{cid}")], 
+        [InlineKeyboardButton("💰 Cobrar", callback_data=f"iptv_msg_{cid}")], 
+        [InlineKeyboardButton("✏️ Editar", callback_data=f"iptv_edit_menu_{cid}"), InlineKeyboardButton("❌ Del", callback_data=f"iptv_kill_{cid}")], 
+        [InlineKeyboardButton("🔙", callback_data="iptv_list")]
+    ]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
 async def iptv_pay_confirm(update, context):
-    cid = update.callback_query.data.replace("iptv_pay_", ""); client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
+    cid = update.callback_query.data.replace("iptv_pay_", "")
+    client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
     if not client: return
-    val = client.get("value", 0); db["transactions"].append({"id": str(uuid.uuid4())[:8], "type": "ganho", "value": val, "category": "Vendas/IPTV", "description": f"IPTV - {client['name']}", "date": get_now().strftime("%d/%m/%Y %H:%M")}); save_db(db)
-    await update.callback_query.answer(f"💰 + R$ {val}!"); await iptv_list(update, context)
-async def iptv_edit_menu(update, context): cid = update.callback_query.data.replace("iptv_edit_menu_", ""); kb = [[InlineKeyboardButton("Nome", callback_data="edit_name"), InlineKeyboardButton("Dia", callback_data="edit_day")], [InlineKeyboardButton("Valor", callback_data="edit_value"), InlineKeyboardButton("Zap", callback_data="edit_phone")], [InlineKeyboardButton("🔙", callback_data=f"iptv_manage_{cid}")]]; context.user_data["edit_id"] = cid; await update.callback_query.edit_message_text("📝 Editar:", reply_markup=InlineKeyboardMarkup(kb))
-async def iptv_edit_ask(update, context): context.user_data["edit_field"] = update.callback_query.data.replace("edit_", ""); await update.callback_query.edit_message_text("Novo valor:"); return IPTV_EDIT_VAL
+    val = client.get("value", 0)
+    db["transactions"].append({"id": str(uuid.uuid4())[:8], "type": "ganho", "value": val, "category": "Vendas/IPTV", "description": f"IPTV - {client['name']}", "date": get_now().strftime("%d/%m/%Y %H:%M")})
+    save_db(db)
+    await update.callback_query.answer(f"💰 + R$ {val}!")
+    await iptv_list(update, context)
+
+async def iptv_edit_menu(update, context): 
+    cid = update.callback_query.data.replace("iptv_edit_menu_", "")
+    kb = [[InlineKeyboardButton("Nome", callback_data="edit_name"), InlineKeyboardButton("Dia", callback_data="edit_day")], [InlineKeyboardButton("Valor", callback_data="edit_value"), InlineKeyboardButton("Zap", callback_data="edit_phone")], [InlineKeyboardButton("🔙", callback_data=f"iptv_manage_{cid}")]]
+    context.user_data["edit_id"] = cid
+    await update.callback_query.edit_message_text("📝 Editar:", reply_markup=InlineKeyboardMarkup(kb))
+
+async def iptv_edit_ask(update, context): 
+    context.user_data["edit_field"] = update.callback_query.data.replace("edit_", "")
+    await update.callback_query.edit_message_text("Novo valor:")
+    return IPTV_EDIT_VAL
+
 async def iptv_edit_save(update, context):
-    cid = context.user_data.get("edit_id"); field = context.user_data.get("edit_field"); val = update.message.text
+    cid = context.user_data.get("edit_id")
+    field = context.user_data.get("edit_field")
+    val = update.message.text
     for c in db["iptv_clients"]: 
         if c["id"] == cid: 
             if field=="day": c[field]=int(val)
             elif field=="value": c[field]=float(val.replace(',','.'))
             else: c[field]=val
-    save_db(db); await update.message.reply_text("✅ Feito!"); return await start(update, context)
+    save_db(db)
+    await update.message.reply_text("✅ Feito!")
+    return await start(update, context)
+
 async def iptv_gen_msg(update, context):
-    cid = update.callback_query.data.replace("iptv_msg_", ""); client = next((c for c in db["iptv_clients"] if c["id"] == cid), None); now = get_now()
-    dia = int(client['day']); m = now.month + 1 if now.day > dia else now.month
-    txt = f"Olá {client['name']}\nSUA CONTA VENCE EM: {dia:02d}/{m:02d}\n\nEvite bloqueio. Pix: {MY_PIX_KEY}\nEnvie o comprovante."; await update.callback_query.message.reply_text(f"`{txt}`", parse_mode="Markdown"); await update.callback_query.answer()
-async def iptv_kill(update, context): cid = update.callback_query.data.replace("iptv_kill_", ""); db["iptv_clients"] = [c for c in db["iptv_clients"] if c["id"] != cid]; save_db(db); await update.callback_query.answer("🗑️"); await iptv_list(update, context)
+    cid = update.callback_query.data.replace("iptv_msg_", "")
+    client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
+    now = get_now()
+    dia = int(client['day'])
+    m = now.month + 1 if now.day > dia else now.month
+    txt = f"Olá {client['name']}\nSUA CONTA VENCE EM: {dia:02d}/{m:02d}\n\nEvite bloqueio. Pix: {MY_PIX_KEY}\nEnvie o comprovante."
+    await update.callback_query.message.reply_text(f"`{txt}`", parse_mode="Markdown")
+    await update.callback_query.answer()
+
+async def iptv_kill(update, context): 
+    cid = update.callback_query.data.replace("iptv_kill_", "")
+    db["iptv_clients"] = [c for c in db["iptv_clients"] if c["id"] != cid]
+    save_db(db)
+    await update.callback_query.answer("🗑️")
+    await iptv_list(update, context)
 
 # ================= RESTO =================
-async def undo_quick(update, context): query = update.callback_query; await query.answer(); db["transactions"].pop() if db["transactions"] else None; save_db(db); await query.edit_message_text("Desfeito!")
-async def manual_gasto_trigger(update, context): context.user_data["t"] = "gasto"; await update.message.reply_text("💸 Valor?"); return REG_VALUE
-async def manual_ganho_trigger(update, context): context.user_data["t"] = "ganho"; await update.message.reply_text("💰 Valor?"); return REG_VALUE
+async def undo_quick(update, context): 
+    query = update.callback_query
+    await query.answer()
+    if db["transactions"]:
+        db["transactions"].pop()
+    save_db(db)
+    await query.edit_message_text("Desfeito!")
+
+async def manual_gasto_trigger(update, context): 
+    context.user_data["t"] = "gasto"
+    await update.message.reply_text("💸 Valor?")
+    return REG_VALUE
+
+async def manual_ganho_trigger(update, context): 
+    context.user_data["t"] = "ganho"
+    await update.message.reply_text("💰 Valor?")
+    return REG_VALUE
+
 async def reg_start(update, context): await start(update, context); return REG_TYPE
 async def reg_type(update, context): context.user_data["t"] = update.callback_query.data.replace("reg_", ""); await update.callback_query.edit_message_text("Valor:"); return REG_VALUE
-async def reg_val(update, context): context.user_data["v"] = float(update.message.text.replace(',', '.')); kb = [[InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in db["categories"][context.user_data["t"]][i:i+2]] for i in range(0, len(db["categories"][context.user_data["t"]]), 2)]; await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb)); return REG_CAT
-async def reg_cat(update, context): context.user_data["c"] = update.callback_query.data.replace("sc_", ""); kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")]]; await update.callback_query.edit_message_text("Descrição?", reply_markup=InlineKeyboardMarkup(kb)); return REG_DESC
+
+async def reg_val(update, context): 
+    context.user_data["v"] = float(update.message.text.replace(',', '.'))
+    kb = [[InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in db["categories"][context.user_data["t"]][i:i+2]] for i in range(0, len(db["categories"][context.user_data["t"]]), 2)]
+    await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb))
+    return REG_CAT
+
+async def reg_cat(update, context): 
+    context.user_data["c"] = update.callback_query.data.replace("sc_", "")
+    kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")]]
+    await update.callback_query.edit_message_text("Descrição?", reply_markup=InlineKeyboardMarkup(kb))
+    return REG_DESC
+
 async def reg_fin(update, context):
     desc = context.user_data["c"] if update.callback_query else update.message.text
     db["transactions"].append({"id":str(uuid.uuid4())[:8], "type":context.user_data["t"], "value":context.user_data["v"], "category":context.user_data["c"], "description":desc, "date":get_now().strftime("%d/%m/%Y %H:%M")})
-    save_db(db); msg = f"✅ Registrado!"; await (update.callback_query.edit_message_text if update.callback_query else update.message.reply_text)(msg); return await start(update, context)
+    save_db(db)
+    msg = f"✅ Registrado!"
+    if update.callback_query: await update.callback_query.edit_message_text(msg)
+    else: await update.message.reply_text(msg)
+    return await start(update, context)
 
-# OUTROS MENUS (Mantidos compactos mas funcionais)
-async def menu_debts(update, context): txt="🧾 Dívidas:"; kb=[[InlineKeyboardButton(f"{n}: {v}", callback_data=f"ed_{n}")] for n,v in db.get("debts_v2", {}).items()]; kb.append([InlineKeyboardButton("➕ Add", callback_data="add_p"), InlineKeyboardButton("🔙", callback_data="back")]); await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+# OUTROS MENUS
+async def menu_debts(update, context): 
+    txt="🧾 Dívidas:"
+    kb=[[InlineKeyboardButton(f"{n}: {v}", callback_data=f"ed_{n}")] for n,v in db.get("debts_v2", {}).items()]
+    kb.append([InlineKeyboardButton("➕ Add", callback_data="add_p"), InlineKeyboardButton("🔙", callback_data="back")])
+    await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
+
 async def add_person_start(update, context): await update.callback_query.edit_message_text("Nome:"); return DEBT_NAME
 async def save_person_name(update, context): db["debts_v2"][update.message.text] = 0.0; save_db(db); await update.message.reply_text("Salvo!"); return await start(update, context)
 async def edit_debt_menu(update, context): context.user_data["dn"] = update.callback_query.data.replace("ed_", ""); kb=[[InlineKeyboardButton("➕ Emprestei", callback_data="da_add"), InlineKeyboardButton("➖ Pagou", callback_data="da_sub")], [InlineKeyboardButton("🗑️", callback_data="da_del"), InlineKeyboardButton("🔙", callback_data="menu_debts")]]; await update.callback_query.edit_message_text(f"👤 {context.user_data['dn']}", reply_markup=InlineKeyboardMarkup(kb))
-async def debt_action(update, context): act=update.callback_query.data; n=context.user_data["dn"]; 
-    if "del" in act: del db["debts_v2"][n]; save_db(db); await menu_debts(update, context); return
-    context.user_data["da"] = "add" if "add" in act else "sub"; await update.callback_query.edit_message_text("Valor?"); return DEBT_VAL
-async def debt_save_val(update, context): v=float(update.message.text.replace(',','.')); n=context.user_data["dn"]; v=-v if context.user_data["da"]=="sub" else v; db["debts_v2"][n]+=v; save_db(db); await update.message.reply_text("Ok!"); return await start(update, context)
+async def debt_action(update, context): 
+    act=update.callback_query.data
+    n=context.user_data["dn"] 
+    if "del" in act: 
+        del db["debts_v2"][n]
+        save_db(db)
+        await menu_debts(update, context)
+        return
+    context.user_data["da"] = "add" if "add" in act else "sub"
+    await update.callback_query.edit_message_text("Valor?")
+    return DEBT_VAL
+
+async def debt_save_val(update, context): 
+    v=float(update.message.text.replace(',','.'))
+    n=context.user_data["dn"]
+    v=-v if context.user_data["da"]=="sub" else v
+    db["debts_v2"][n]+=v
+    save_db(db)
+    await update.message.reply_text("Ok!")
+    return await start(update, context)
 
 async def menu_shop(update, context): l=db["shopping_list"]; txt="🛒 Lista:\n"+"\n".join(l); kb=[[InlineKeyboardButton("Limpar", callback_data="sl_c"), InlineKeyboardButton("🔙", callback_data="back")]]; await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb))
 async def sl_c(update, context): db["shopping_list"]=[]; save_db(db); await start(update, context)
-
 async def rep_list(update, context): t=db["transactions"][-10:]; txt="\n".join([f"{x['type']} {x['value']} ({x['description']})" for x in t]); await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]))
 async def menu_manage_trans(update, context): kb=[[InlineKeyboardButton(f"🗑️ {t['value']} ({t['description']})", callback_data=f"del_tr_{t['id']}")] for t in db["transactions"][-5:]]; kb.append([InlineKeyboardButton("🔙", callback_data="menu_reports")]); await update.callback_query.edit_message_text("Apagar:", reply_markup=InlineKeyboardMarkup(kb))
 async def delete_transaction_confirm(update, context): tid=update.callback_query.data.replace("del_tr_", ""); db["transactions"]=[t for t in db["transactions"] if t['id']!=tid]; save_db(db); await update.callback_query.answer("Apagado!"); await menu_manage_trans(update, context)
 async def rep_insights(update, context): await update.callback_query.answer("Use o botão Vidente IPTV para previsão."); await menu_reports(update, context)
-async def rep_pie(update, context): await update.callback_query.answer("Gerando..."); 
-    cats={}; m=get_now().strftime("%m/%Y"); 
+async def rep_pie(update, context): 
+    await update.callback_query.answer("Gerando...")
+    cats={}
+    m=get_now().strftime("%m/%Y")
     for t in db["transactions"]: 
         if t['type']=='gasto' and m in t['date']: cats[t['category']]=cats.get(t['category'],0)+t['value']
     if not cats: return
-    fig, ax = plt.subplots(figsize=(6, 4)); ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=COLORS); ax.legend(cats.keys(), loc="best"); buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0); plt.close(); await update.callback_query.message.reply_photo(buf)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.pie(cats.values(), autopct='%1.1f%%', startangle=90, colors=COLORS)
+    ax.legend(cats.keys(), loc="best")
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    plt.close()
+    await update.callback_query.message.reply_photo(buf)
+
 async def rep_pdf(update, context): 
-    with open("relatorio.pdf", "w") as f: f.write("PDF Dummy"); 
-    # Simplificado para caber. A versão anterior tinha o PDF real.
-    await update.callback_query.answer("PDF Gerado (Simulado)"); 
+    c = canvas.Canvas("relatorio.pdf", pagesize=letter)
+    c.drawString(50, 750, "EXTRATO")
+    y = 700
+    for t in reversed(db["transactions"][-40:]):
+        c.drawString(50, y, f"{t['date']} | R$ {t['value']:.2f} | {t['description']}")
+        y -= 20
+    c.save()
+    with open("relatorio.pdf", "rb") as f: await update.callback_query.message.reply_document(f)
 
 async def menu_cats(update, context): await update.callback_query.edit_message_text("Categorias:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕", callback_data="c_add"), InlineKeyboardButton("❌", callback_data="c_del"), InlineKeyboardButton("🔙", callback_data="back")]]))
 async def c_add(update, context): await update.callback_query.edit_message_text("Tipo:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gasto", callback_data="nc_gasto"), InlineKeyboardButton("Ganho", callback_data="nc_ganho")]])); return CAT_ADD_TYPE
@@ -467,10 +576,10 @@ async def smart_entry(update, context):
 
 # ================= MAIN =================
 def main():
-    print("🚀 V108 ULTIMATE ONLINE...")
+    print("🚀 V109 CLEAN CODE ONLINE...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "V108 OK"
+    def home(): return "V109 OK"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -502,7 +611,7 @@ def main():
         fallbacks=[CommandHandler("start", start)]
     ))
 
-    # Handler Metas (Novo)
+    # Handler Metas
     app_bot.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(goal_add, pattern="^goal_add")],
         states={GOAL_NAME:[MessageHandler(filters.TEXT, goal_save_name)], GOAL_VAL:[MessageHandler(filters.TEXT, goal_save_val)]},
@@ -529,7 +638,7 @@ def main():
     scheduler.add_job(routine_checks, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V108 ULTIMATE ONLINE!")
+    print("✅ V109 CLEAN CODE ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
