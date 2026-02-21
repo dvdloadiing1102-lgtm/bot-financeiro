@@ -46,11 +46,11 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v105.json"
+DB_FILE = "finance_v106.json"
 
-# ESTADOS CONVERSATION
+# ESTADOS CONVERSATION (Adicionado IPTV_VAL)
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION, 
- IPTV_NAME, IPTV_PHONE, IPTV_DAY, IPTV_EDIT_VAL) = range(13)
+ IPTV_NAME, IPTV_PHONE, IPTV_DAY, IPTV_VAL, IPTV_EDIT_VAL) = range(14)
 
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6']
 plt.style.use('dark_background')
@@ -82,7 +82,7 @@ if GEMINI_KEY:
 def load_db():
     default = {
         "transactions": [], "shopping_list": [], "debts_v2": {},
-        "categories": {"ganho": ["Salário", "Extra"], "gasto": ["Alimentação", "Transporte", "Lazer", "Mercado", "Casa"]},
+        "categories": {"ganho": ["Salário", "Extra", "Vendas/IPTV"], "gasto": ["Alimentação", "Transporte", "Lazer", "Mercado", "Casa"]},
         "vip_users": {}, "config": {"panic_mode": False, "persona": "padrao"}, "reminders": [], "subscriptions": [],
         "iptv_clients": []
     }
@@ -90,11 +90,10 @@ def load_db():
     try:
         with open(DB_FILE, "r") as f: 
             data = json.load(f)
-            # Migração de VPN para IPTV se existir
-            if "vpn_clients" in data:
-                data["iptv_clients"] = data.pop("vpn_clients")
             if "iptv_clients" not in data: data["iptv_clients"] = []
-            if "config" not in data: data["config"] = {"panic_mode": False, "persona": "padrao"}
+            # Garante categoria IPTV
+            if "Vendas/IPTV" not in data["categories"]["ganho"]:
+                data["categories"]["ganho"].append("Vendas/IPTV")
             return data
     except: return default
 
@@ -125,7 +124,7 @@ def restricted(func):
         return await func(update, context, *args, **kwargs)
     return wrapped
 
-# --- VERIFICAÇÕES AUTOMÁTICAS (AGENDA + IPTV + BACKUP) ---
+# --- VERIFICAÇÕES AUTOMÁTICAS ---
 async def routine_checks(context):
     now = get_now()
     now_str = now.strftime("%Y-%m-%d %H:%M")
@@ -151,11 +150,9 @@ async def routine_checks(context):
         await perform_auto_backup(context)
 
 async def check_iptv_due(context):
-    """Verifica quem vence AMANHÃ"""
     now = get_now()
     amanha = now + timedelta(days=1)
     clientes_vencendo = []
-    
     for c in db["iptv_clients"]:
         try:
             if int(c["day"]) == amanha.day:
@@ -163,10 +160,10 @@ async def check_iptv_due(context):
         except: pass
     
     if clientes_vencendo and ADMIN_ID:
-        msg = f"📺 **ALERTA IPTV**\n\nExistem {len(clientes_vencendo)} clientes vencendo AMANHÃ (Dia {amanha.day:02d}).\nClique para cobrar:"
+        msg = f"📺 **ALERTA IPTV**\n\nExistem {len(clientes_vencendo)} clientes vencendo AMANHÃ (Dia {amanha.day:02d})."
         kb = []
         for c in clientes_vencendo:
-            kb.append([InlineKeyboardButton(f"📲 {c['name']}", callback_data=f"iptv_manage_{c['id']}")])
+            kb.append([InlineKeyboardButton(f"📲 Cobrar {c['name']}", callback_data=f"iptv_manage_{c['id']}")])
         await context.bot.send_message(chat_id=ADMIN_ID, text=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def perform_auto_backup(context):
@@ -181,7 +178,7 @@ async def start(update, context):
     context.user_data.clear(); saldo, gastos = calc_stats(); uid = update.effective_user.id
     status, msg_vip = is_vip(uid)
     kb_inline = [
-        [InlineKeyboardButton("📺 Gestão IPTV", callback_data="menu_iptv")], # RENOMEADO
+        [InlineKeyboardButton("📺 Gestão IPTV", callback_data="menu_iptv")],
         [InlineKeyboardButton("📂 Categorias", callback_data="menu_cats"), InlineKeyboardButton("🛒 Mercado", callback_data="menu_shop")],
         [InlineKeyboardButton("🧾 Dívidas/Pessoas", callback_data="menu_debts"), InlineKeyboardButton("📊 Relatórios", callback_data="menu_reports")],
         [InlineKeyboardButton("🎲 Roleta", callback_data="roleta"), InlineKeyboardButton("⏰ Agenda", callback_data="menu_agenda")],
@@ -191,7 +188,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO & IPTV V105**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO & IPTV V106**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -206,143 +203,143 @@ async def back(update, context):
 async def cancel_op(update, context):
     await update.message.reply_text("🚫 Cancelado."); return ConversationHandler.END
 
-# ================= MÓDULO IPTV (EDITÁVEL) =================
+# ================= MÓDULO IPTV (COM VALOR E PAGAMENTO) =================
 async def menu_iptv(update, context):
     total = len(db["iptv_clients"])
-    msg = f"📺 **GESTOR IPTV DVD NET**\nClientes Ativos: **{total}**\n\nO que deseja fazer?"
+    # Calcula previsão de receita
+    receita = sum(c.get("value", 0) for c in db["iptv_clients"])
+    msg = f"📺 **GESTOR IPTV DVD NET**\n👥 Clientes: **{total}**\n💰 Receita Mensal Est: **R$ {receita:.2f}**\n\nO que deseja fazer?"
     kb = [
         [InlineKeyboardButton("➕ Novo Cliente", callback_data="iptv_add"), InlineKeyboardButton("📋 Lista de Clientes", callback_data="iptv_list")],
         [InlineKeyboardButton("🔙 Voltar", callback_data="back")]
     ]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-# Adicionar Cliente IPTV
+# Adicionar Cliente IPTV (Agora pede Valor)
 async def iptv_add_start(update, context): await update.callback_query.edit_message_text("👤 **Nome do Cliente:**"); return IPTV_NAME
-async def iptv_save_name(update, context): context.user_data["vn"] = update.message.text; await update.message.reply_text("📱 **WhatsApp (DDD + Número):**\nEx: 21999998888"); return IPTV_PHONE
+async def iptv_save_name(update, context): context.user_data["vn"] = update.message.text; await update.message.reply_text("📱 **WhatsApp (DDD + Número):**"); return IPTV_PHONE
 async def iptv_save_phone(update, context): context.user_data["vp"] = update.message.text; await update.message.reply_text("📅 **Dia do Vencimento (1-31):**"); return IPTV_DAY
 async def iptv_save_day(update, context):
     try:
         d = int(update.message.text)
         if d < 1 or d > 31: raise ValueError
-        c = {"id": str(uuid.uuid4())[:8], "name": context.user_data["vn"], "phone": context.user_data["vp"], "day": d}
+        context.user_data["vd"] = d
+        await update.message.reply_text("💵 **Valor do Plano (Ex: 35.00):**")
+        return IPTV_VAL
+    except:
+        await update.message.reply_text("❌ Dia inválido. Tente novamente:"); return IPTV_DAY
+
+async def iptv_save_val(update, context):
+    try:
+        v = float(update.message.text.replace(',', '.'))
+        c = {"id": str(uuid.uuid4())[:8], "name": context.user_data["vn"], "phone": context.user_data["vp"], "day": context.user_data["vd"], "value": v}
         db["iptv_clients"].append(c); save_db(db)
-        await update.message.reply_text(f"✅ Cliente **{c['name']}** adicionado!\nVence dia: {d}")
+        await update.message.reply_text(f"✅ Cliente **{c['name']}** salvo!\nValor: R$ {v:.2f}")
         return await start(update, context)
     except:
-        await update.message.reply_text("❌ Dia inválido. Digite apenas o número (1 a 31).")
-        return IPTV_DAY
+        await update.message.reply_text("❌ Valor inválido. Digite número (Ex: 35.00):"); return IPTV_VAL
 
-# Listar Clientes
+# Listar
 async def iptv_list(update, context):
     if not db["iptv_clients"]: await update.callback_query.edit_message_text("Nenhum cliente.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_iptv")] ])); return
-    
     kb = []
-    # Ordena por dia de vencimento
     sorted_clients = sorted(db["iptv_clients"], key=lambda x: int(x['day']))
-    
     for c in sorted_clients:
-        kb.append([InlineKeyboardButton(f"Dia {c['day']:02d} | {c['name']}", callback_data=f"iptv_manage_{c['id']}")])
-    
+        # Se o cliente não tem valor cadastrado (antigo), mostra aviso
+        val_display = f"R$ {c.get('value', 0):.2f}"
+        kb.append([InlineKeyboardButton(f"{c['day']:02d} | {c['name']} ({val_display})", callback_data=f"iptv_manage_{c['id']}")])
     kb.append([InlineKeyboardButton("🔙 Voltar", callback_data="menu_iptv")])
-    await update.callback_query.edit_message_text("📋 **Selecione um Cliente para Gerenciar:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await update.callback_query.edit_message_text("📋 **Selecione para Gerenciar:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-# GERENCIAR CLIENTE (NOVO - PERMITE EDITAR)
+# GERENCIAR CLIENTE (COM BOTÃO DE PAGAMENTO)
 async def iptv_manage_client(update, context):
     cid = update.callback_query.data.replace("iptv_manage_", "")
     client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
     if not client: await update.callback_query.answer("Cliente não encontrado."); await iptv_list(update, context); return
 
-    context.user_data["edit_id"] = cid # Salva ID para edição
+    context.user_data["edit_id"] = cid
+    val = client.get("value", 0.0)
 
-    msg = f"👤 **CLIENTE:** {client['name']}\n📱 **Zap:** {client['phone']}\n📅 **Vence:** Dia {client['day']}\n\nO que deseja fazer?"
+    msg = f"👤 **{client['name']}**\n📱 {client['phone']}\n📅 Vence dia {client['day']}\n💵 Plano: **R$ {val:.2f}**\n\nO que deseja?"
     kb = [
-        [InlineKeyboardButton("💰 Gerar Cobrança", callback_data=f"iptv_msg_{cid}")],
-        [InlineKeyboardButton("✏️ Editar Dados", callback_data=f"iptv_edit_menu_{cid}")],
-        [InlineKeyboardButton("❌ Remover", callback_data=f"iptv_kill_{cid}")],
+        [InlineKeyboardButton("✅ CONFIRMAR PAGAMENTO", callback_data=f"iptv_pay_{cid}")],
+        [InlineKeyboardButton("💰 Gerar Cobrança (Texto)", callback_data=f"iptv_msg_{cid}")],
+        [InlineKeyboardButton("✏️ Editar", callback_data=f"iptv_edit_menu_{cid}"), InlineKeyboardButton("❌ Remover", callback_data=f"iptv_kill_{cid}")],
         [InlineKeyboardButton("🔙 Voltar", callback_data="iptv_list")]
     ]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-# MENU DE EDIÇÃO
+# --- AÇÃO DE PAGAMENTO (INTEGRAÇÃO COM FINANCEIRO) ---
+async def iptv_pay_confirm(update, context):
+    cid = update.callback_query.data.replace("iptv_pay_", "")
+    client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
+    if not client: return
+    
+    valor = client.get("value", 0.0)
+    if valor <= 0:
+        await update.callback_query.answer("❌ Edite o cliente e adicione um valor primeiro!", show_alert=True)
+        return
+
+    # Adiciona ao Financeiro
+    desc = f"Mensalidade IPTV - {client['name']}"
+    db["transactions"].append({
+        "id": str(uuid.uuid4())[:8],
+        "type": "ganho",
+        "value": valor,
+        "category": "Vendas/IPTV",
+        "description": desc,
+        "date": get_now().strftime("%d/%m/%Y %H:%M")
+    })
+    save_db(db)
+    
+    await update.callback_query.answer(f"💰 Recebido R$ {valor:.2f}!", show_alert=True)
+    await update.callback_query.message.edit_text(f"✅ **PAGAMENTO CONFIRMADO!**\n\nAdicionado ao caixa:\n💰 R$ {valor:.2f}\n👤 {client['name']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar", callback_data="iptv_list")]]))
+
+# Edição
 async def iptv_edit_menu(update, context):
     cid = update.callback_query.data.replace("iptv_edit_menu_", "")
-    kb = [
-        [InlineKeyboardButton("Nome", callback_data="edit_name"), InlineKeyboardButton("Dia Venc.", callback_data="edit_day")],
-        [InlineKeyboardButton("WhatsApp", callback_data="edit_phone"), InlineKeyboardButton("🔙 Voltar", callback_data=f"iptv_manage_{cid}")]
-    ]
-    await update.callback_query.edit_message_text("📝 **O que deseja alterar?**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    kb = [[InlineKeyboardButton("Nome", callback_data="edit_name"), InlineKeyboardButton("Dia", callback_data="edit_day")],
+          [InlineKeyboardButton("Valor", callback_data="edit_value"), InlineKeyboardButton("Zap", callback_data="edit_phone")],
+          [InlineKeyboardButton("🔙 Voltar", callback_data=f"iptv_manage_{cid}")]]
+    await update.callback_query.edit_message_text("📝 **O que editar?**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-# CAPTURA O QUE VAI EDITAR
 async def iptv_edit_ask(update, context):
     field = update.callback_query.data.replace("edit_", "")
     context.user_data["edit_field"] = field
-    
-    labels = {"name": "Novo Nome:", "day": "Novo Dia de Vencimento:", "phone": "Novo WhatsApp:"}
+    labels = {"name": "Novo Nome:", "day": "Novo Dia (1-31):", "phone": "Novo WhatsApp:", "value": "Novo Valor (Ex: 35.00):"}
     await update.callback_query.edit_message_text(labels.get(field, "Novo valor:"))
     return IPTV_EDIT_VAL
 
-# SALVA A EDIÇÃO
 async def iptv_edit_save(update, context):
     cid = context.user_data.get("edit_id")
     field = context.user_data.get("edit_field")
     new_val = update.message.text
     
-    # Validação do Dia
-    if field == "day":
-        try:
-            d = int(new_val)
-            if d < 1 or d > 31: raise ValueError
-        except:
-            await update.message.reply_text("❌ Dia inválido. Tente de novo (1-31):"); return IPTV_EDIT_VAL
+    # Validações
+    try:
+        if field == "day": new_val = int(new_val)
+        if field == "value": new_val = float(new_val.replace(',', '.'))
+    except:
+        await update.message.reply_text("❌ Valor inválido. Tente de novo."); return IPTV_EDIT_VAL
 
-    # Atualiza no banco
     for c in db["iptv_clients"]:
-        if c["id"] == cid:
-            c[field] = new_val
-            break
+        if c["id"] == cid: c[field] = new_val; break
     
-    save_db(db)
-    await update.message.reply_text("✅ Dados atualizados com sucesso!")
-    # Retorna para o menu do cliente
-    return await start(update, context)
+    save_db(db); await update.message.reply_text("✅ Atualizado!"); return await start(update, context)
 
-# Gerar Mensagem de Cobrança (Igual V104)
+# Mensagem Cobrança
 async def iptv_gen_msg(update, context):
     cid = update.callback_query.data.replace("iptv_msg_", "")
     client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
-    if not client: await update.callback_query.answer("Erro"); return
+    if not client: return
     
-    now = get_now()
-    dia_venc = int(client['day'])
-    mes = now.month; ano = now.year
-    if now.day > dia_venc: 
-        mes += 1
-        if mes > 12: mes = 1; ano += 1
+    now = get_now(); dia_venc = int(client['day']); mes = now.month; ano = now.year
+    if now.day > dia_venc: mes += 1; 
+    if mes > 12: mes = 1; ano += 1
+    data_fmt = f"{dia_venc:02d}/{mes:02d}/{ano}"
     
-    data_formatada = f"{dia_venc:02d}/{mes:02d}/{ano}"
-    
-    texto_cobranca = f"""Olá querido(a) cliente {client['name']}
-
-SUA CONTA EXPIRA EM BREVE!
-
-Seu plano vence em:
-{data_formatada}
-
-Evite o bloqueio automático do seu sinal
-
-Para renovar o seu plano agora, faça o
-pix no seguinte pix:
-
-Pix: {MY_PIX_KEY}
-
-Por favor, nos envie o comprovante de
-pagamento assim que possível.
-
-É sempre um prazer te atender."""
-
-    await update.callback_query.message.reply_text(f"📋 **Mensagem para {client['name']}**")
-    await update.callback_query.message.reply_text(f"`{texto_cobranca}`", parse_mode="Markdown")
-    await update.callback_query.answer("Gerado!")
+    txt = f"Olá querido(a) cliente {client['name']}\n\nSUA CONTA EXPIRA EM BREVE!\n\nSeu plano vence em:\n{data_fmt}\n\nEvite o bloqueio automático do seu sinal\n\nPara renovar o seu plano agora, faça o\npix no seguinte pix:\n\nPix: {MY_PIX_KEY}\n\nPor favor, nos envie o comprovante de\npagamento assim que possível.\n\nÉ sempre um prazer te atender."
+    await update.callback_query.message.reply_text(f"📋 **Copia e manda:**\n`{txt}`", parse_mode="Markdown"); await update.callback_query.answer("Gerado!")
 
 async def iptv_kill(update, context):
     cid = update.callback_query.data.replace("iptv_kill_", "")
@@ -365,11 +362,7 @@ async def reg_val(update, context):
     except: return REG_VALUE
     kb = [[InlineKeyboardButton(c, callback_data=f"sc_{c}") for c in cats[i:i+2]] for i in range(0, len(cats), 2)]
     await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(kb)); return REG_CAT
-async def reg_cat(update, context): 
-    context.user_data["c"] = update.callback_query.data.replace("sc_", "")
-    kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")]]
-    await update.callback_query.edit_message_text("📝 Qual a descrição? (Ex: Uber, Mercado Assaí, etc)\n\nOu clique em Pular.", reply_markup=InlineKeyboardMarkup(kb))
-    return REG_DESC
+async def reg_cat(update, context): context.user_data["c"] = update.callback_query.data.replace("sc_", ""); kb = [[InlineKeyboardButton("⏩ Pular", callback_data="skip_d")]]; await update.callback_query.edit_message_text("📝 Qual a descrição?", reply_markup=InlineKeyboardMarkup(kb)); return REG_DESC
 async def reg_fin(update, context):
     if update.callback_query and update.callback_query.data == "skip_d": desc = context.user_data["c"]
     else: desc = update.message.text
@@ -487,7 +480,7 @@ async def sub_del_menu(update, context): db["subscriptions"] = []; save_db(db); 
 async def dream_cmd(update, context): 
     try: v = float(context.args[-1]); await update.message.reply_text(f"🛌 Meta ajustada para: R$ {v}")
     except: pass
-async def menu_help(update, context): await update.callback_query.edit_message_text("📚 **Manual de IA:**\n\n- 'Gastei 50 de Uber'\n- 'Adicionar leite na lista'\n- 'Quanto gastei de ifood?'\n\n**IPTV:** Menu 'Gestão IPTV' para cobrar e editar clientes.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
+async def menu_help(update, context): await update.callback_query.edit_message_text("📚 **Manual:**\n\n**IPTV:**\nAdicione o valor do plano ao cadastrar o cliente. Clique em '✅ Pagou' para lançar no caixa.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
 async def backup(update, context): with open(DB_FILE, "rb") as f: await update.callback_query.message.reply_document(f)
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def gen_key(update, context): pass
@@ -548,10 +541,10 @@ async def smart_entry(update, context):
 
 # ================= 9. MAIN =================
 def main():
-    print("🚀 Iniciando Bot V105 (IPTV MASTER)...")
+    print("🚀 Iniciando Bot V106 (INTEGRAÇÃO IPTV)...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "Bot V105 Online"
+    def home(): return "Bot V106 Online"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -579,11 +572,11 @@ def main():
     # Handler IPTV (ADD)
     app_bot.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(iptv_add_start, pattern="^iptv_add")],
-        states={IPTV_NAME:[MessageHandler(filters.TEXT, iptv_save_name)], IPTV_PHONE:[MessageHandler(filters.TEXT, iptv_save_phone)], IPTV_DAY:[MessageHandler(filters.TEXT, iptv_save_day)]},
+        states={IPTV_NAME:[MessageHandler(filters.TEXT, iptv_save_name)], IPTV_PHONE:[MessageHandler(filters.TEXT, iptv_save_phone)], IPTV_DAY:[MessageHandler(filters.TEXT, iptv_save_day)], IPTV_VAL:[MessageHandler(filters.TEXT, iptv_save_val)]},
         fallbacks=[CommandHandler("start", start)]
     ))
 
-    # Handler IPTV (EDIT) - NOVO!
+    # Handler IPTV (EDIT)
     app_bot.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(iptv_edit_ask, pattern="^edit_")],
         states={IPTV_EDIT_VAL:[MessageHandler(filters.TEXT, iptv_edit_save)]},
@@ -601,7 +594,7 @@ def main():
            ("ed_", edit_debt_menu), ("da_", debt_action), ("sc_", reg_cat),
            # IPTV Callbacks
            ("menu_iptv", menu_iptv), ("iptv_list", iptv_list), ("iptv_manage_", iptv_manage_client), 
-           ("iptv_msg_", iptv_gen_msg), ("iptv_kill_", iptv_kill), ("iptv_edit_menu_", iptv_edit_menu)]
+           ("iptv_msg_", iptv_gen_msg), ("iptv_pay_", iptv_pay_confirm), ("iptv_kill_", iptv_kill), ("iptv_edit_menu_", iptv_edit_menu)]
     
     for p, f in cbs: app_bot.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
     app_bot.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, restricted(smart_entry)))
@@ -610,7 +603,7 @@ def main():
     scheduler.add_job(routine_checks, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V105 IPTV MASTER ONLINE!")
+    print("✅ V106 IPTV INTEGRADO ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
