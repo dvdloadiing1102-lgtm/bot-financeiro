@@ -47,7 +47,7 @@ warnings.filterwarnings("ignore")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = int(os.getenv("ALLOWED_USERS", "0").split(",")[0] if os.getenv("ALLOWED_USERS") else 0)
-DB_FILE = "finance_v116.json"
+DB_FILE = "finance_v119.json"
 
 # ESTADOS CONVERSATION
 (REG_TYPE, REG_VALUE, REG_CAT, REG_DESC, CAT_ADD_TYPE, CAT_ADD_NAME, DEBT_NAME, DEBT_VAL, DEBT_ACTION, 
@@ -55,7 +55,7 @@ DB_FILE = "finance_v116.json"
 
 COLORS = ['#ff9999','#66b3ff','#99ff99','#ffcc99', '#c2c2f0','#ffb3e6']
 plt.style.use('dark_background')
-MY_PIX_KEY = "21998121271" # SUA CHAVE PIX DA FOTO
+MY_PIX_KEY = "21998121271" # CHAVE PIX DAVID
 
 # ================= 3. IA SETUP =================
 model_ai = None
@@ -128,22 +128,21 @@ async def routine_checks(context):
     now = get_now()
     now_str = now.strftime("%Y-%m-%d %H:%M")
     
-    # 1. Agenda (Disparo de Lembretes)
+    # 1. Agenda
     to_remove = []
     if "reminders" in db and db["reminders"]:
         for i, rem in enumerate(db["reminders"]):
             if rem["time"] == now_str:
-                try: 
-                    await context.bot.send_message(chat_id=ADMIN_ID, text=f"⏰ **AGENDA ({rem['time']})**\n\n📌 {rem['text']}", parse_mode="Markdown")
+                try: await context.bot.send_message(chat_id=ADMIN_ID, text=f"⏰ **AGENDA ({rem['time']})**\n\n📌 {rem['text']}", parse_mode="Markdown")
                 except: pass
                 to_remove.append(i)
         if to_remove:
             for index in sorted(to_remove, reverse=True): del db["reminders"][index]
             save_db(db)
     
-    # 2. IPTV Cobrança
+    # 2. IPTV (09:00)
     if now.hour == 9 and now.minute == 0: await check_iptv_due(context)
-    # 3. Backup
+    # 3. Backup (23:59)
     if now.hour == 23 and now.minute == 59: await perform_auto_backup(context)
     # 4. Conquistas
     if now.minute == 30: await check_achievements(context)
@@ -168,15 +167,12 @@ async def check_achievements(context):
     if not ADMIN_ID: return
     new_badge = None
     if len(db["iptv_clients"]) >= 5 and "ip_baron" not in db["achievements"]:
-        db["achievements"].append("ip_baron"); new_badge = "👑 **Barão do IPTV** (5+ Clientes)"
-    
+        db["achievements"].append("ip_baron"); new_badge = "👑 **Barão do IPTV**"
     saldo, _ = calc_stats()
     if saldo > 1000 and "rich_1k" not in db["achievements"]:
-        db["achievements"].append("rich_1k"); new_badge = "💸 **Primeiro K** (Saldo > R$ 1.000)"
-    
+        db["achievements"].append("rich_1k"); new_badge = "💸 **Primeiro K**"
     if new_badge:
-        save_db(db)
-        await context.bot.send_message(chat_id=ADMIN_ID, text=f"🏆 **NOVA CONQUISTA DESBLOQUEADA!**\n\n{new_badge}", parse_mode="Markdown")
+        save_db(db); await context.bot.send_message(chat_id=ADMIN_ID, text=f"🏆 **NOVA CONQUISTA!**\n\n{new_badge}", parse_mode="Markdown")
 
 # ================= 6. INTERFACE =================
 async def start(update, context):
@@ -195,7 +191,7 @@ async def start(update, context):
     if uid == ADMIN_ID: kb_inline.insert(0, [InlineKeyboardButton("👑 PAINEL DO DONO", callback_data="admin_panel")])
     kb_reply = [["💸 Gasto", "💰 Ganho"], ["📊 Relatórios", "👛 Saldo"]]
     
-    msg = f"💎 **FINANCEIRO V116 (AGENDA+IPTV)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
+    msg = f"💎 **FINANCEIRO V119 (FULL TEXT)**\n{msg_vip} | {MODEL_STATUS}\n\n💰 Saldo: **R$ {saldo:.2f}**\n📉 Gastos: R$ {gastos:.2f}"
     
     if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb_inline), parse_mode="Markdown")
     else:
@@ -213,19 +209,19 @@ async def cancel_op(update, context):
 # ================= METAS =================
 async def menu_goals(update, context):
     saldo, _ = calc_stats()
-    txt = f"🎯 **METAS FINANCEIRAS**\nSeu saldo disponível: R$ {saldo:.2f}\n\n"
-    if not db["goals"]: txt += "_Nenhuma meta cadastrada._"
+    txt = f"🎯 **METAS**\nSaldo: R$ {saldo:.2f}\n\n"
+    if not db["goals"]: txt += "_Vazio_"
     else:
         for g in db["goals"]:
             prog = (saldo / g['val']) * 100 if g['val'] > 0 else 0
             if prog > 100: prog = 100
             bar = "█" * int(prog/10) + "░" * (10 - int(prog/10))
             txt += f"📌 **{g['name']}**\nR$ {g['val']:.2f}\n`[{bar}] {prog:.1f}%`\n\n"
-    kb = [[InlineKeyboardButton("➕ Nova Meta", callback_data="goal_add"), InlineKeyboardButton("🗑️ Limpar", callback_data="goal_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
+    kb = [[InlineKeyboardButton("➕ Nova", callback_data="goal_add"), InlineKeyboardButton("🗑️ Limpar", callback_data="goal_del")], [InlineKeyboardButton("🔙", callback_data="back")]]
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-async def goal_add(update, context): await update.callback_query.edit_message_text("Nome da Meta (ex: Carro):"); return GOAL_NAME
-async def goal_save_name(update, context): context.user_data["gn"] = update.message.text; await update.message.reply_text("Valor da Meta (ex: 30000):"); return GOAL_VAL
+async def goal_add(update, context): await update.callback_query.edit_message_text("Nome da Meta:"); return GOAL_NAME
+async def goal_save_name(update, context): context.user_data["gn"] = update.message.text; await update.message.reply_text("Valor (Ex: 30000):"); return GOAL_VAL
 async def goal_save_val(update, context):
     try:
         v = float(update.message.text.replace(',', '.'))
@@ -237,36 +233,33 @@ async def goal_del(update, context): db["goals"] = []; save_db(db); await menu_g
 # ================= CONQUISTAS =================
 async def menu_badges(update, context):
     badges = db.get("achievements", [])
-    txt = "🏆 **SUAS CONQUISTAS:**\n\n"
-    mapa = {"ip_baron": "👑 **Barão do IPTV**: 5+ Clientes", "rich_1k": "💸 **Primeiro K**: Saldo > 1.000"}
-    if not badges: txt += "_Ainda sem medalhas. Continue usando!_"
+    txt = "🏆 **CONQUISTAS:**\n\n"
+    mapa = {"ip_baron": "👑 **Barão IPTV**", "rich_1k": "💸 **Primeiro K**"}
+    if not badges: txt += "_Continue usando!_"
     else:
-        for b in badges: txt += f"{mapa.get(b, '🏅 Medalha Secreta')}\n"
+        for b in badges: txt += f"{mapa.get(b, '🏅 Medalha')}\n"
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]), parse_mode="Markdown")
 
-# ================= RELATÓRIOS COMPLETOS =================
+# ================= RELATÓRIOS =================
 async def menu_reports(update, context): 
     kb = [
-        [InlineKeyboardButton("🏆 Ranking Gastos", callback_data="rep_rank"), InlineKeyboardButton("📉 Comparativo Mês", callback_data="rep_comp")],
+        [InlineKeyboardButton("🏆 Ranking", callback_data="rep_rank"), InlineKeyboardButton("📉 Comparativo", callback_data="rep_comp")],
         [InlineKeyboardButton("🔮 Vidente IPTV", callback_data="rep_forecast"), InlineKeyboardButton("🔮 Insights", callback_data="rep_insights")],
         [InlineKeyboardButton("📝 Extrato", callback_data="rep_list"), InlineKeyboardButton("🗑️ Gerenciar", callback_data="menu_manage_trans")], 
         [InlineKeyboardButton("🍕 Pizza", callback_data="rep_pie"), InlineKeyboardButton("📈 Evolução", callback_data="rep_evo")],
         [InlineKeyboardButton("📄 PDF", callback_data="rep_pdf"), InlineKeyboardButton("📊 CSV", callback_data="rep_csv")],
         [InlineKeyboardButton("📅 Mapa", callback_data="rep_nospend"), InlineKeyboardButton("🔙 Voltar", callback_data="back")]
     ]
-    await update.callback_query.edit_message_text("📊 **Relatórios Ultimate:**", reply_markup=InlineKeyboardMarkup(kb))
+    await update.callback_query.edit_message_text("📊 **Relatórios:**", reply_markup=InlineKeyboardMarkup(kb))
 
 async def rep_rank(update, context):
     await update.callback_query.answer("Calculando...")
-    m = get_now().strftime("%m/%Y")
-    rank = {}
+    m = get_now().strftime("%m/%Y"); rank = {}
     for t in db["transactions"]:
         if t['type'] == 'gasto' and m in t['date']:
-            k = t.get('description', t['category'])
-            rank[k] = rank.get(k, 0) + t['value']
+            k = t.get('description', t['category']); rank[k] = rank.get(k, 0) + t['value']
     sorted_rank = sorted(rank.items(), key=lambda item: item[1], reverse=True)[:5]
-    txt = f"🏆 **RANKING DE VILÕES ({m})**\n\n"
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    txt = f"🏆 **VILÕES ({m})**\n\n"; medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
     for i, (nome, val) in enumerate(sorted_rank): txt += f"{medals[i]} **{nome}**: R$ {val:.2f}\n"
     await update.callback_query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="menu_reports")]]), parse_mode="Markdown")
 
@@ -344,7 +337,13 @@ async def iptv_manage_client(update, context):
     cid = update.callback_query.data.replace("iptv_manage_", ""); client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
     if not client: await iptv_list(update, context); return
     msg = f"👤 **{client['name']}**\nVence dia {client['day']}\nPlano: R$ {client.get('value',0):.2f}"
-    kb = [[InlineKeyboardButton("✅ PAGOU", callback_data=f"iptv_pay_{cid}")], [InlineKeyboardButton("💰 Cobrar", callback_data=f"iptv_msg_{cid}")], [InlineKeyboardButton("✏️ Editar", callback_data=f"iptv_edit_menu_{cid}"), InlineKeyboardButton("❌ Del", callback_data=f"iptv_kill_{cid}")], [InlineKeyboardButton("🔙", callback_data="iptv_list")]]
+    # DOIS BOTÕES DE COBRANÇA AGORA
+    kb = [
+        [InlineKeyboardButton("✅ PAGOU", callback_data=f"iptv_pay_{cid}")], 
+        [InlineKeyboardButton("💰 Normal", callback_data=f"iptv_msg_{cid}"), InlineKeyboardButton("⏳ Atraso", callback_data=f"iptv_late_{cid}")], 
+        [InlineKeyboardButton("✏️ Editar", callback_data=f"iptv_edit_menu_{cid}"), InlineKeyboardButton("❌ Del", callback_data=f"iptv_kill_{cid}")], 
+        [InlineKeyboardButton("🔙", callback_data="iptv_list")]
+    ]
     await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def iptv_pay_confirm(update, context):
@@ -367,37 +366,20 @@ async def iptv_edit_save(update, context):
             else: c[field]=val
     save_db(db); await update.message.reply_text("✅ Feito!"); return await start(update, context)
 
-# --- TEXTO DA FOTO (CORRIGIDO PARA O SEU PADRÃO) ---
+# --- MENSAGEM PADRÃO (ATUALIZADA) ---
 async def iptv_gen_msg(update, context):
-    cid = update.callback_query.data.replace("iptv_msg_", "")
-    client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
-    now = get_now()
-    dia = int(client['day'])
-    m = now.month + 1 if now.day > dia else now.month
-    ano = now.year + 1 if m == 1 and now.month == 12 else now.year
+    cid = update.callback_query.data.replace("iptv_msg_", ""); client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
+    now = get_now(); dia = int(client['day']); m = now.month + 1 if now.day > dia else now.month; ano = now.year + 1 if m == 1 and now.month == 12 else now.year
     data_formatada = f"{dia:02d}/{m:02d}/{ano}"
-    
-    txt = f"""Olá querido(a) cliente {client['name']}
+    txt = f"""Olá querido(a) cliente {client['name']}\n\nSUA CONTA EXPIRA EM BREVE!\n\nSeu plano vence em:\n{data_formatada}\n\nEvite o bloqueio automático do seu sinal\n\nPara renovar o seu plano agora, faça o\npix no seguinte pix:\n\nPix: {MY_PIX_KEY}\nNome: David Vasconcellos\n\nPor favor, nos envie o comprovante de\npagamento assim que possível.\n\n⚠️ Mensagem automática: Caso já tenha pago, ignore esta mensagem.\n\nÉ sempre um prazer te atender."""
+    await update.callback_query.message.reply_text(f"`{txt}`", parse_mode="Markdown"); await update.callback_query.answer()
 
-SUA CONTA EXPIRA EM BREVE!
-
-Seu plano vence em:
-{data_formatada}
-
-Evite o bloqueio automático do seu sinal
-
-Para renovar o seu plano agora, faça o
-pix no seguinte pix:
-
-Pix: {MY_PIX_KEY}
-
-Por favor, nos envie o comprovante de
-pagamento assim que possível.
-
-É sempre um prazer te atender."""
-    
-    await update.callback_query.message.reply_text(f"`{txt}`", parse_mode="Markdown")
-    await update.callback_query.answer()
+# --- NOVA MENSAGEM DE ATRASO (V119 - CORRIGIDA) ---
+async def iptv_late_msg(update, context):
+    cid = update.callback_query.data.replace("iptv_late_", ""); client = next((c for c in db["iptv_clients"] if c["id"] == cid), None)
+    now = get_now(); dia = int(client['day']); data_formatada = f"{dia:02d}/{now.month:02d}"
+    txt = f"""⚠️ **AVISO DE SUSPENSÃO**\n\nOlá, {client['name']}.\nConsta em aberto a sua renovação vencida em: **{data_formatada}**.\n\n**O seu sinal entrou na lista de bloqueio automático e pode parar a qualquer momento.**\n\nPara manter o serviço ativo, regularize agora:\n\n💠 **Pix:** {MY_PIX_KEY}\n👤 **Nome:** David Vasconcellos\n\n*Envie o comprovante para reativação imediata.*\n\n⚠️ **Mensagem automática:** Caso já tenha efetuado o pagamento, por favor, desconsidere este aviso."""
+    await update.callback_query.message.reply_text(f"`{txt}`", parse_mode="Markdown"); await update.callback_query.answer()
 
 async def iptv_kill(update, context): 
     cid = update.callback_query.data.replace("iptv_kill_", ""); db["iptv_clients"] = [c for c in db["iptv_clients"] if c["id"] != cid]; save_db(db); await update.callback_query.answer("🗑️"); await iptv_list(update, context)
@@ -470,7 +452,7 @@ async def sub_cmd(update, context):
     except: await update.message.reply_text("Erro. Use: `/sub Nome Valor Dia`")
 async def sub_del_menu(update, context): db["subscriptions"] = []; save_db(db); await menu_subs(update, context)
 
-# --- AGENDA (FIXED) ---
+# --- AGENDA (COM SUPORTE IA) ---
 async def menu_agenda(update, context): 
     rems = db.get("reminders", [])
     if not rems: txt = "_Nenhum lembrete._"
@@ -483,7 +465,7 @@ async def backup(update, context):
 async def admin_panel(update, context): await update.callback_query.edit_message_text("Admin", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="back")]]))
 async def roleta(update, context): await update.callback_query.edit_message_text("Girar", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Girar", callback_data="roleta"), InlineKeyboardButton("🔙", callback_data="back")]]))
 
-# --- IA HANDLER CORRIGIDO ---
+# --- IA HANDLER ---
 @restricted
 async def smart_entry(update, context):
     if not model_ai: await update.message.reply_text("⚠️ IA Offline."); return
@@ -525,10 +507,10 @@ async def smart_entry(update, context):
 
 # ================= MAIN =================
 def main():
-    print("🚀 V116 AGENDA+IPTV ONLINE...")
+    print("🚀 V119 FULL TEXT ONLINE...")
     app_flask = Flask('')
     @app_flask.route('/')
-    def home(): return "V116 OK"
+    def home(): return "V119 OK"
     threading.Thread(target=lambda: app_flask.run(host='0.0.0.0', port=10000), daemon=True).start()
     
     app_bot = ApplicationBuilder().token(TOKEN).build()
@@ -575,7 +557,7 @@ def main():
            ("roleta", roleta), ("menu_help", menu_help), ("backup", backup), ("admin_panel", admin_panel), ("undo_quick", undo_quick),
            ("ed_", edit_debt_menu), ("da_", debt_action), ("sc_", reg_cat),
            ("menu_iptv", menu_iptv), ("iptv_list", iptv_list), ("iptv_manage_", iptv_manage_client), 
-           ("iptv_msg_", iptv_gen_msg), ("iptv_pay_", iptv_pay_confirm), ("iptv_kill_", iptv_kill), ("iptv_edit_menu_", iptv_edit_menu),
+           ("iptv_msg_", iptv_gen_msg), ("iptv_late_", iptv_late_msg), ("iptv_pay_", iptv_pay_confirm), ("iptv_kill_", iptv_kill), ("iptv_edit_menu_", iptv_edit_menu),
            ("menu_goals", menu_goals), ("goal_del", goal_del), ("menu_badges", menu_badges), ("rep_rank", rep_rank), ("rep_comp", rep_comp), ("rep_forecast", rep_forecast)]
     
     for p, f in cbs: app_bot.add_handler(CallbackQueryHandler(f, pattern=f"^{p}"))
@@ -585,7 +567,7 @@ def main():
     scheduler.add_job(routine_checks, 'interval', minutes=1, args=[app_bot])
     scheduler.start()
     
-    print("✅ V116 AGENDA+IPTV ONLINE!")
+    print("✅ V119 FULL TEXT ONLINE!")
     app_bot.run_polling()
 
 if __name__ == "__main__":
